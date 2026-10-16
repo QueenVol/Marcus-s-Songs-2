@@ -2,15 +2,35 @@ using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
 
-/// <summary>Builds, turns, and displays the 3x3 Rubik's cube.</summary>
+/// <summary>Builds, turns, and displays an odd-sized Rubik's cube.</summary>
 public class RubiksCubeController : MonoBehaviour
 {
-    const float Spacing = 1.02f;
-    readonly Color[] faceColors = {
-        new Color(.92f,.12f,.16f), new Color(1f,.42f,.08f),
-        new Color(.98f,.78f,.12f), new Color(.96f,.96f,.92f),
-        new Color(.12f,.42f,.95f), new Color(.12f,.72f,.32f)
-    };
+    [Header("Cube layout")]
+    [SerializeField, Min(3)] int size = 3;
+    [SerializeField, Min(.5f)] float cubieSpacing = 1.02f;
+    [SerializeField, Range(.5f, 1f)] float cubieScale = .96f;
+    [SerializeField] Transform cubePivot;
+    [Header("Face colors (+X, -X, +Y, -Y, +Z, -Z)")]
+    [SerializeField] Color rightColor = new Color(.92f,.12f,.16f);
+    [SerializeField] Color leftColor = new Color(1f,.42f,.08f);
+    [SerializeField] Color upColor = new Color(.98f,.78f,.12f);
+    [SerializeField] Color downColor = new Color(.96f,.96f,.92f);
+    [SerializeField] Color frontColor = new Color(.12f,.42f,.95f);
+    [SerializeField] Color backColor = new Color(.12f,.72f,.32f);
+    [SerializeField] Color gapColor = new Color(.035f,.045f,.065f);
+    [Header("Camera and lighting")]
+    [SerializeField] Camera cubeCamera;
+    [SerializeField] Light keyLight;
+    [SerializeField] Vector3 cameraPosition = new Vector3(0, 0, -10);
+    [SerializeField, Range(20, 80)] float cameraFieldOfView = 42;
+    [SerializeField] Vector2 startingOrbit = new Vector2(-24f, 32f);
+    [SerializeField, Min(0)] float dragSensitivity = .45f;
+    [SerializeField] Color backgroundColor = new Color(.055f,.075f,.12f);
+    [Header("Controls")]
+    [SerializeField] bool showMoveButtons = true;
+    [SerializeField] bool showShuffleButton = true;
+    [SerializeField, Min(1)] int shuffleMoveCount = 18;
+    [SerializeField, Min(.01f)] float turnDuration = .2f;
 
     readonly List<Transform> cubies = new List<Transform>();
     Transform pivot;
@@ -25,27 +45,23 @@ public class RubiksCubeController : MonoBehaviour
     public bool IsBusy => turning || (playerController != null && playerController.IsMoving);
     public Transform CubePivot => pivot;
     public Camera MainCamera => cam;
-
-    [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
-    static void Install()
-    {
-        var camera = Camera.main;
-        var host = camera ? camera.gameObject : new GameObject("Rubiks Cube Controller");
-        if (!host.GetComponent<RubiksCubeController>()) host.AddComponent<RubiksCubeController>();
-        if (!host.GetComponent<CubePlayerController>()) host.AddComponent<CubePlayerController>();
-    }
+    public IReadOnlyList<Transform> Cubies => cubies;
+    public float CellSpacing => cubieSpacing;
+    public float FaceExtent => cubieScale*.5f;
+    public int OuterLayer => size/2;
 
     void Start()
     {
-        cam = Camera.main;
+        size = Mathf.Max(3, size | 1);
+        cam = cubeCamera != null ? cubeCamera : Camera.main;
         if (!cam) { var go = new GameObject("Main Camera"); go.tag = "MainCamera"; cam = go.AddComponent<Camera>(); }
-        cam.transform.position = new Vector3(0, 0, -10);
+        cam.transform.position = cameraPosition;
         cam.transform.rotation = Quaternion.identity;
-        cam.fieldOfView = 42;
-        cam.backgroundColor = new Color(.055f,.075f,.12f);
+        cam.fieldOfView = cameraFieldOfView;
+        cam.backgroundColor = backgroundColor;
         cam.clearFlags = CameraClearFlags.SolidColor;
 
-        var light = FindObjectOfType<Light>();
+        var light = keyLight != null ? keyLight : FindObjectOfType<Light>();
         if (!light)
         {
             var lightObject = new GameObject("Key Light");
@@ -55,12 +71,18 @@ public class RubiksCubeController : MonoBehaviour
             lightObject.transform.rotation = Quaternion.Euler(35,-35,0);
         }
 
-        pivot = new GameObject("Rubik's Cube").transform;
+        pivot = cubePivot != null ? cubePivot : new GameObject("Rubik's Cube").transform;
+        pivot.name = "Rubik's Cube";
         BuildCube();
         playerController = GetComponent<CubePlayerController>();
-        if (!playerController) playerController = gameObject.AddComponent<CubePlayerController>();
-        Transform startingCubie = cubies.Find(c => (c.localPosition - Vector3.up*Spacing).sqrMagnitude < .001f);
-        playerController.Initialize(this, startingCubie);
+        if (playerController != null)
+        {
+            Vector3 face = playerController.StartingFace;
+            Transform startingCubie = cubies.Find(c => (c.localPosition - face*(OuterLayer*cubieSpacing)).sqrMagnitude < .001f);
+            playerController.Initialize(this, startingCubie);
+        }
+        orbitX = startingOrbit.x;
+        orbitY = startingOrbit.y;
         UpdateOrbit();
     }
 
@@ -74,26 +96,28 @@ public class RubiksCubeController : MonoBehaviour
 
     void BuildCube()
     {
-        var black = MakeMaterial(new Color(.035f,.045f,.065f));
-        var materials = new Material[6];
-        for (int i = 0; i < materials.Length; i++) materials[i] = MakeMaterial(faceColors[i]);
+        var black = MakeMaterial(gapColor);
+        Color[] colors = { rightColor, leftColor, upColor, downColor, frontColor, backColor };
+        var materials = new Material[colors.Length];
+        for (int i = 0; i < materials.Length; i++) materials[i] = MakeMaterial(colors[i]);
 
-        for (int x=-1; x<=1; x++) for (int y=-1; y<=1; y++) for (int z=-1; z<=1; z++)
+        int min = -OuterLayer, max = OuterLayer;
+        for (int x=min; x<=max; x++) for (int y=min; y<=max; y++) for (int z=min; z<=max; z++)
         {
             var cubie = GameObject.CreatePrimitive(PrimitiveType.Cube);
             cubie.name = $"Cubie {x},{y},{z}";
             cubie.transform.SetParent(pivot, false);
-            cubie.transform.localPosition = new Vector3(x,y,z)*Spacing;
-            cubie.transform.localScale = Vector3.one*.96f;
+            cubie.transform.localPosition = new Vector3(x,y,z)*cubieSpacing;
+            cubie.transform.localScale = Vector3.one*cubieScale;
             cubies.Add(cubie.transform);
 
             var renderer = cubie.GetComponent<Renderer>();
             cubie.GetComponent<MeshFilter>().sharedMesh = CreateFaceMesh();
             renderer.sharedMaterials = new[]
             {
-                x==1 ? materials[0] : black, x==-1 ? materials[1] : black,
-                y==1 ? materials[2] : black, y==-1 ? materials[3] : black,
-                z==1 ? materials[4] : black, z==-1 ? materials[5] : black
+                x==max ? materials[0] : black, x==min ? materials[1] : black,
+                y==max ? materials[2] : black, y==min ? materials[3] : black,
+                z==max ? materials[4] : black, z==min ? materials[5] : black
             };
         }
     }
@@ -127,7 +151,7 @@ public class RubiksCubeController : MonoBehaviour
     public bool PointerOverControls(Vector3 screenPoint)
     {
         float x = screenPoint.x, y = Screen.height-screenPoint.y;
-        return (y >= Screen.height-72 && x >= 30 && x <= 30+12*(44+7))
+        return (showMoveButtons && y >= Screen.height-72 && x >= 30 && x <= 30+12*(44+7))
             || (y >= Screen.height-72 && x >= Screen.width-164 && x <= Screen.width-28)
             || (y >= 24 && y <= 66 && x >= Screen.width-164 && x <= Screen.width-28);
     }
@@ -139,8 +163,8 @@ public class RubiksCubeController : MonoBehaviour
         if (dragging && Input.GetMouseButton(0) && (Input.mousePosition-lastMouse).sqrMagnitude >= 36f)
         {
             Vector3 delta = Input.mousePosition-lastMouse;
-            orbitY += delta.x*.45f;
-            orbitX = Mathf.Clamp(orbitX-delta.y*.45f, -80f, 80f);
+            orbitY += delta.x*dragSensitivity;
+            orbitX = Mathf.Clamp(orbitX-delta.y*dragSensitivity, -80f, 80f);
             lastMouse = Input.mousePosition;
             UpdateOrbit();
         }
@@ -154,19 +178,20 @@ public class RubiksCubeController : MonoBehaviour
         turning = true;
         var selected = new List<Transform>();
         foreach (Transform cubie in cubies)
-            if (cubie != null && cubie.parent == pivot && Mathf.RoundToInt(Vector3.Dot(cubie.localPosition,axis)/Spacing) == layer)
+            if (cubie != null && cubie.parent == pivot && Mathf.RoundToInt(Vector3.Dot(cubie.localPosition,axis)/cubieSpacing) == layer)
                 selected.Add(cubie);
 
         var group = new GameObject("Turning layer").transform;
+        if (playerController != null) playerController.ClearHighlights();
         group.SetParent(pivot, false);
         foreach (Transform cubie in selected) cubie.SetParent(group, true);
         Quaternion from = group.localRotation;
         Quaternion to = from*Quaternion.AngleAxis(degrees,axis);
         float elapsed = 0;
-        while (elapsed < .2f)
+        while (elapsed < turnDuration)
         {
             elapsed += Time.deltaTime;
-            group.localRotation = Quaternion.Slerp(from,to,elapsed/.2f);
+            group.localRotation = Quaternion.Slerp(from,to,elapsed/turnDuration);
             yield return null;
         }
         group.localRotation = to;
@@ -180,15 +205,36 @@ public class RubiksCubeController : MonoBehaviour
         }
         Destroy(group.gameObject);
         turning = false;
+        if (playerController != null) playerController.RefreshHighlights();
+    }
+
+    public void DebugMove(string move)
+    {
+        if (!Application.isPlaying || IsBusy || string.IsNullOrEmpty(move)) return;
+        char face = char.ToUpperInvariant(move[0]);
+        Vector3 axis = (face=='U'||face=='D') ? Vector3.up
+            : (face=='L'||face=='R') ? Vector3.right : Vector3.forward;
+        int layer = (face=='U'||face=='R'||face=='F') ? OuterLayer : -OuterLayer;
+        StartCoroutine(Turn(axis,layer,move.EndsWith("′") || move.EndsWith("'") ? -90f : 90f));
+    }
+
+    public void DebugShuffle()
+    {
+        if (Application.isPlaying && !IsBusy) StartCoroutine(Shuffle());
+    }
+
+    public void DebugRefreshPlayer()
+    {
+        if (Application.isPlaying && playerController != null) playerController.RefreshHighlights();
     }
 
     void Snap(Transform cubie)
     {
         Vector3 position = cubie.localPosition;
         cubie.localPosition = new Vector3(
-            Mathf.Round(position.x/Spacing)*Spacing,
-            Mathf.Round(position.y/Spacing)*Spacing,
-            Mathf.Round(position.z/Spacing)*Spacing);
+            Mathf.Round(position.x/cubieSpacing)*cubieSpacing,
+            Mathf.Round(position.y/cubieSpacing)*cubieSpacing,
+            Mathf.Round(position.z/cubieSpacing)*cubieSpacing);
         Vector3 angles = cubie.localEulerAngles;
         cubie.localRotation = Quaternion.Euler(
             Mathf.Round(angles.x/90f)*90f,
@@ -199,15 +245,18 @@ public class RubiksCubeController : MonoBehaviour
     IEnumerator Shuffle()
     {
         if (IsBusy) yield break;
-        for (int i=0; i<18; i++)
+        for (int i=0; i<shuffleMoveCount; i++)
         {
             Vector3 axis = Random.value < .5f ? Vector3.up : Vector3.right;
-            int layer = Random.Range(-1,2);
+            int layer = Random.Range(-OuterLayer,OuterLayer+1);
             yield return Turn(axis,layer,Random.value < .5f ? 90f : -90f);
         }
     }
 
-    void UpdateOrbit() => pivot.rotation = Quaternion.Euler(orbitX,orbitY,0);
+    void UpdateOrbit()
+    {
+        if (pivot != null) pivot.rotation = Quaternion.Euler(orbitX,orbitY,0);
+    }
 
     void OnGUI()
     {
@@ -217,19 +266,17 @@ public class RubiksCubeController : MonoBehaviour
             buttonStyle.fontSize = 17;
         }
         GUI.color = new Color(1,1,1,.92f);
-        float width = 44, gap = 7, start = 30, y = Screen.height-72;
-        string[] moves = { "U","U′","D","D′","L","L′","R","R′","F","F′","B","B′" };
-        for (int i=0; i<moves.Length; i++)
+        if (showMoveButtons)
         {
-            if (!GUI.Button(new Rect(start+i*(width+gap),y,width,40),moves[i],buttonStyle) || IsBusy) continue;
-            string move = moves[i];
-            Vector3 axis = (move[0]=='U'||move[0]=='D') ? Vector3.up
-                : (move[0]=='L'||move[0]=='R') ? Vector3.right : Vector3.forward;
-            int layer = (move[0]=='U'||move[0]=='R'||move[0]=='F') ? 1 : -1;
-            float degrees = move.EndsWith("′") ? -90f : 90f;
-            StartCoroutine(Turn(axis,layer,degrees));
+            float width = 44, gap = 7, start = 30, y = Screen.height-72;
+            string[] moves = { "U","U′","D","D′","L","L′","R","R′","F","F′","B","B′" };
+            for (int i=0; i<moves.Length; i++)
+            {
+                if (!GUI.Button(new Rect(start+i*(width+gap),y,width,40),moves[i],buttonStyle) || IsBusy) continue;
+                DebugMove(moves[i]);
+            }
         }
-        if (GUI.Button(new Rect(Screen.width-164,24,136,42),"打乱魔方",buttonStyle) && !IsBusy)
+        if (showShuffleButton && GUI.Button(new Rect(Screen.width-164,24,136,42),"打乱魔方",buttonStyle) && !IsBusy)
             StartCoroutine(Shuffle());
     }
 }

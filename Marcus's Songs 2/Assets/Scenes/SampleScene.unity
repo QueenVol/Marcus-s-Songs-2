@@ -265,3 +265,87 @@ Transform:
   m_Father: {fileID: 0}
   m_RootOrder: 0
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!1 &1875000000
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInternal: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 1875000001}
+  - component: {fileID: 1875000002}
+  - component: {fileID: 1875000003}
+  m_Layer: 0
+  m_Name: GameManager
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!4 &1875000001
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInternal: {fileID: 0}
+  m_GameObject: {fileID: 1875000000}
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_Children: []
+  m_Father: {fileID: 0}
+  m_RootOrder: 2
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!114 &1875000002
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInternal: {fileID: 0}
+  m_GameObject: {fileID: 1875000000}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 4ae019d49ef1d684a9e3b04fb8fc6309, type: 3}
+  m_Name:
+  m_EditorClassIdentifier:
+  size: 3
+  cubieSpacing: 1.02
+  cubieScale: 0.96
+  cubePivot: {fileID: 0}
+  rightColor: {r: 0.92, g: 0.12, b: 0.16, a: 1}
+  leftColor: {r: 1, g: 0.42, b: 0.08, a: 1}
+  upColor: {r: 0.98, g: 0.78, b: 0.12, a: 1}
+  downColor: {r: 0.96, g: 0.96, b: 0.92, a: 1}
+  frontColor: {r: 0.12, g: 0.42, b: 0.95, a: 1}
+  backColor: {r: 0.12, g: 0.72, b: 0.32, a: 1}
+  gapColor: {r: 0.035, g: 0.045, b: 0.065, a: 1}
+  cubeCamera: {fileID: 963194227}
+  keyLight: {fileID: 705507994}
+  cameraPosition: {x: 0, y: 0, z: -10}
+  cameraFieldOfView: 42
+  startingOrbit: {x: -24, y: 32}
+  dragSensitivity: 0.45
+  backgroundColor: {r: 0.055, g: 0.075, b: 0.12, a: 1}
+  showMoveButtons: 1
+  showShuffleButton: 1
+  shuffleMoveCount: 18
+  turnDuration: 0.2
+--- !u!114 &1875000003
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInternal: {fileID: 0}
+  m_GameObject: {fileID: 1875000000}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 781eef4e62a74f0db29ab3aa0810ce17, type: 3}
+  m_Name:
+  m_EditorClassIdentifier:
+  playerColor: {r: 0.15, g: 0.9, b: 1, a: 1}
+  playerScale: {x: 0.46, y: 0.025, z: 0.46}
+  startingFace: {x: 0, y: 1, z: 0}
+  playerHeight: 0.54
+  moveDuration: 0.28
+  outlineColor: {r: 1, g: 1, b: 0, a: 1}
+  outlineEmission: {r: 1, g: 1, b: 0, a: 1}
+  outlineThickness: 0.04
+  outlineSurfaceOffset: 0.002
+  allowMouseMovement: 1
