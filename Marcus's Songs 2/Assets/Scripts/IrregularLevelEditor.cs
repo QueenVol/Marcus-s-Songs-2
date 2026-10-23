@@ -8,7 +8,7 @@ using UnityEngine;
 /// </summary>
 public class IrregularLevelEditor : MonoBehaviour
 {
-    public enum EditMode { Place, SelectLayer, Erase }
+    public enum EditMode { Place, SelectLayer, SetSpawnPoint, Erase }
     public enum Axis { X, Y, Z }
 
     [System.Serializable]
@@ -16,6 +16,9 @@ public class IrregularLevelEditor : MonoBehaviour
     {
         public List<Vector3Int> cells = new List<Vector3Int>();
         public List<SavedLayer> layers = new List<SavedLayer>();
+        public bool hasSpawnPoint;
+        public Vector3Int spawnPoint;
+        public Vector3Int spawnFaceNormal = Vector3Int.up;
     }
 
     [System.Serializable]
@@ -44,6 +47,7 @@ public class IrregularLevelEditor : MonoBehaviour
     [SerializeField] Color cubeColor = new Color(0.72f, 0.77f, 0.83f);
     [SerializeField] Color selectedColor = new Color(1f, 0.26f, 0.18f);
     [SerializeField] Color axisColor = new Color(0.12f, 0.64f, 1f);
+    [SerializeField] Color spawnPointColor = new Color(1f, 0.8f, 0.12f);
     [SerializeField] Color gridColor = new Color(0.4f, 0.52f, 0.65f, 0.25f);
 
     readonly Dictionary<Vector3Int, Transform> cells = new Dictionary<Vector3Int, Transform>();
@@ -51,13 +55,18 @@ public class IrregularLevelEditor : MonoBehaviour
     int activeLayerIndex = -1;
     Camera viewCamera;
     Material cubeMaterial, selectedMaterial, axisMaterial, gridMaterial;
+    Material spawnPointMaterial;
     LineRenderer axisLine;
+    Transform spawnCube;
+    Transform spawnMarker;
+    Vector3Int spawnFaceNormal = Vector3Int.up;
     EditMode mode = EditMode.SelectLayer;
     Vector3Int placementCoordinate = new Vector3Int(3, 0, 0);
     string placementX = "3", placementY = "0", placementZ = "0";
     bool rotating;
     float orbitYaw = -34f, orbitPitch = 24f, orbitDistance = 12f;
     Vector2 lastMouse;
+    Vector2 panelScroll;
     GUIStyle titleStyle, hintStyle;
     string status = "Select cubes to define a rotating layer.";
 
@@ -77,6 +86,7 @@ public class IrregularLevelEditor : MonoBehaviour
         selectedMaterial = MakeMaterial(selectedColor);
         axisMaterial = MakeMaterial(axisColor);
         gridMaterial = MakeMaterial(gridColor);
+        spawnPointMaterial = MakeMaterial(spawnPointColor);
         CreateAxisLine();
         if (loadExampleOnStart) CreateExample();
         UpdateCamera();
@@ -116,6 +126,7 @@ public class IrregularLevelEditor : MonoBehaviour
         AddLayer("Layer 1");
         foreach (Vector3Int cell in example)
             if (cell.x == 0) SetSelected(cell, true);
+        SetSpawnPoint(new Vector3Int(0, 0, 0), Vector3Int.up);
     }
 
     void AddCell(Vector3Int cell)
@@ -136,6 +147,7 @@ public class IrregularLevelEditor : MonoBehaviour
     {
         if (!cells.TryGetValue(cell, out Transform cube)) return;
         cells.Remove(cell);
+        if (spawnCube == cube) SetSpawnPoint(null);
         foreach (RotationLayer layer in layers) layer.cubes.Remove(cube);
         Destroy(cube.gameObject);
         if (viewCamera != null) UpdateCamera();
@@ -172,6 +184,38 @@ public class IrregularLevelEditor : MonoBehaviour
     void RefreshCellColors()
     {
         foreach (Vector3Int cell in cells.Keys) UpdateCellColor(cell);
+    }
+
+    void SetSpawnPoint(Vector3Int? cell, Vector3Int faceNormal = default)
+    {
+        if (spawnMarker != null) Destroy(spawnMarker.gameObject);
+        spawnMarker = null;
+        spawnCube = null;
+        if (faceNormal == Vector3Int.zero) faceNormal = Vector3Int.up;
+        if (!cell.HasValue || !cells.TryGetValue(cell.Value, out spawnCube)) return;
+        spawnFaceNormal = SnapToFace(faceNormal);
+
+        var marker = GameObject.CreatePrimitive(PrimitiveType.Cube);
+        marker.name = "Player Spawn Face Marker";
+        marker.transform.SetParent(spawnCube, false);
+        marker.transform.localPosition = (Vector3)spawnFaceNormal * 0.515f;
+        marker.transform.localRotation = Quaternion.FromToRotation(Vector3.up, spawnFaceNormal);
+        marker.transform.localScale = new Vector3(0.72f, 0.025f, 0.72f);
+        marker.GetComponent<Renderer>().sharedMaterial = spawnPointMaterial;
+        Collider markerCollider = marker.GetComponent<Collider>();
+        if (markerCollider != null) Destroy(markerCollider);
+        spawnMarker = marker.transform;
+    }
+
+    static Vector3Int SnapToFace(Vector3 value)
+    {
+        if (value.sqrMagnitude < 0.001f) return Vector3Int.up;
+        value.Normalize();
+        if (Mathf.Abs(value.x) > Mathf.Abs(value.y) && Mathf.Abs(value.x) > Mathf.Abs(value.z))
+            return value.x > 0f ? Vector3Int.right : Vector3Int.left;
+        if (Mathf.Abs(value.y) > Mathf.Abs(value.z))
+            return value.y > 0f ? Vector3Int.up : Vector3Int.down;
+        return value.z > 0f ? new Vector3Int(0, 0, 1) : new Vector3Int(0, 0, -1);
     }
 
     void UpdateCellColor(Vector3Int cell)
@@ -339,7 +383,7 @@ public class IrregularLevelEditor : MonoBehaviour
             UpdateCamera();
         }
         float scroll = Input.mouseScrollDelta.y;
-        if (Mathf.Abs(scroll) > 0.01f)
+        if (Mathf.Abs(scroll) > 0.01f && !PointerOverEditorPanel())
         {
             orbitDistance = Mathf.Clamp(orbitDistance - scroll * 0.6f, 5f, 24f);
             UpdateCamera();
@@ -351,7 +395,11 @@ public class IrregularLevelEditor : MonoBehaviour
 
     bool EventSystemIsOverGUI()
     {
-        // IMGUI has no EventSystem pointer API; leaving the panel hit area clear is sufficient here.
+        return PointerOverEditorPanel();
+    }
+
+    bool PointerOverEditorPanel()
+    {
         Vector3 mouse = Input.mousePosition;
         float guiY = Screen.height - mouse.y;
         return mouse.x < 326f && guiY < Screen.height - 18f;
@@ -366,6 +414,12 @@ public class IrregularLevelEditor : MonoBehaviour
         Vector3Int cell = LocalToCell(cube.localPosition);
         if (mode == EditMode.SelectLayer)
             SetSelected(cell, ActiveLayer != null && ActiveLayer.cubes.Contains(cube) == false);
+        else if (mode == EditMode.SetSpawnPoint)
+        {
+            Vector3Int faceNormal = SnapToFace(cube.InverseTransformDirection(hit.normal));
+            SetSpawnPoint(cell, faceNormal);
+            status = $"Player spawn point set to {cell}, face {faceNormal}.";
+        }
         else if (mode == EditMode.Erase)
             RemoveCell(cell);
         else
@@ -431,6 +485,7 @@ public class IrregularLevelEditor : MonoBehaviour
         }
 
         GUILayout.BeginArea(new Rect(18, 18, 310, Screen.height - 36), GUI.skin.box);
+        panelScroll = GUILayout.BeginScrollView(panelScroll, GUILayout.Width(290), GUILayout.Height(Screen.height - 56));
         GUILayout.Label("Irregular Cube Level Editor", titleStyle);
         GUILayout.Label("Unlimited grid · selected cubes rotate 90° around the blue axis", hintStyle);
         GUILayout.Space(8);
@@ -438,9 +493,15 @@ public class IrregularLevelEditor : MonoBehaviour
         GUILayout.BeginHorizontal();
         if (GUILayout.Toggle(mode == EditMode.Place, "Place", GUI.skin.button)) mode = EditMode.Place;
         if (GUILayout.Toggle(mode == EditMode.SelectLayer, "Select layer", GUI.skin.button)) mode = EditMode.SelectLayer;
+        if (GUILayout.Toggle(mode == EditMode.SetSpawnPoint, "Set spawn", GUI.skin.button)) mode = EditMode.SetSpawnPoint;
         if (GUILayout.Toggle(mode == EditMode.Erase, "Erase", GUI.skin.button)) mode = EditMode.Erase;
         GUILayout.EndHorizontal();
-        GUILayout.Label("Click a cube to use the selected mode.", hintStyle);
+        GUILayout.Label(mode == EditMode.SetSpawnPoint
+            ? "Click a cube to set the player start. The gold marker shows the current spawn point."
+            : "Click a cube to use the selected mode.", hintStyle);
+        GUILayout.Label(spawnCube == null
+            ? "Player spawn: not set"
+            : $"Player spawn: {LocalToCell(spawnCube.localPosition)}, face {spawnFaceNormal}", hintStyle);
         GUILayout.Space(8);
 
         GUILayout.Label("Rotation layers");
@@ -548,8 +609,8 @@ public class IrregularLevelEditor : MonoBehaviour
 
         GUILayout.Space(8);
         GUILayout.Label(status, hintStyle);
-        GUILayout.FlexibleSpace();
         GUILayout.Label("Right-drag: orbit camera   ·   Mouse wheel: zoom", hintStyle);
+        GUILayout.EndScrollView();
         GUILayout.EndArea();
     }
 
@@ -582,6 +643,13 @@ public class IrregularLevelEditor : MonoBehaviour
     {
         var data = new SavedLevel();
         foreach (Vector3Int cell in cells.Keys) data.cells.Add(cell);
+        if (spawnCube != null)
+        {
+            data.hasSpawnPoint = true;
+            data.spawnPoint = LocalToCell(spawnCube.localPosition);
+            Vector3 faceInLevelSpace = transform.InverseTransformDirection(spawnCube.TransformDirection(spawnFaceNormal));
+            data.spawnFaceNormal = SnapToFace(faceInLevelSpace);
+        }
         foreach (RotationLayer layer in layers)
         {
             var saved = new SavedLayer { name = layer.name, axis = (int)layer.axis, axisPoint = layer.axisPoint };
@@ -610,6 +678,7 @@ public class IrregularLevelEditor : MonoBehaviour
             return;
         }
         foreach (Transform cube in new List<Transform>(cells.Values)) Destroy(cube.gameObject);
+        SetSpawnPoint(null);
         cells.Clear();
         layers.Clear(); activeLayerIndex = -1;
         foreach (Vector3Int cell in data.cells) AddCell(cell);
@@ -622,6 +691,7 @@ public class IrregularLevelEditor : MonoBehaviour
                 foreach (Vector3Int cell in saved.cells)
                     if (cells.TryGetValue(cell, out Transform cube) && !ActiveLayer.cubes.Contains(cube)) ActiveLayer.cubes.Add(cube);
             }
+        if (data.hasSpawnPoint && cells.ContainsKey(data.spawnPoint)) SetSpawnPoint(data.spawnPoint, data.spawnFaceNormal);
         RefreshCellColors();
         UpdateAxisLine();
         status = "Loaded the saved irregular level.";
