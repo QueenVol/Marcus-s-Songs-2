@@ -47,6 +47,11 @@ public class IrregularLevelRuntime : MonoBehaviour
     [SerializeField] Color playerColor = new Color(0.15f, 0.9f, 1f);
     [SerializeField, Min(0.1f)] float playerHeight = 0.54f;
     [SerializeField, Min(0.01f)] float moveDuration = 0.24f;
+    [Header("Reachable face outline")]
+    [SerializeField] Color outlineColor = Color.yellow;
+    [SerializeField] Color outlineEmission = Color.yellow;
+    [SerializeField, Min(0.001f)] float outlineThickness = 0.04f;
+    [SerializeField, Min(0f)] float outlineSurfaceOffset = 0.002f;
     [Header("View")]
     [SerializeField] Color backgroundColor = new Color(0.055f, 0.075f, 0.12f);
     [SerializeField] Color axisColor = new Color(0.12f, 0.64f, 1f);
@@ -54,6 +59,7 @@ public class IrregularLevelRuntime : MonoBehaviour
 
     readonly Dictionary<Vector3Int, Transform> cells = new Dictionary<Vector3Int, Transform>();
     readonly List<RuntimeLayer> layers = new List<RuntimeLayer>();
+    readonly List<GameObject> reachableHighlights = new List<GameObject>();
     Camera viewCamera;
     Transform worldRoot, playerToken, currentCube;
     Vector3Int currentFace = Vector3Int.up;
@@ -61,12 +67,14 @@ public class IrregularLevelRuntime : MonoBehaviour
     bool moving, rotating;
     float orbitYaw = -34f, orbitPitch = 24f, orbitDistance = 12f;
     Vector2 lastMouse;
-    Material cubeMaterial, playerMaterial, axisMaterial;
+    Material cubeMaterial, playerMaterial, axisMaterial, outlineMaterial;
+    Mesh outlineMesh;
     LineRenderer axisLine;
     GUIStyle titleStyle, bodyStyle;
     string status = "Click an adjacent face to move. Q/E rotates the active layer.";
 
     RuntimeLayer ActiveLayer => activeLayerIndex >= 0 && activeLayerIndex < layers.Count ? layers[activeLayerIndex] : null;
+    static Rect HudRect => new Rect(18f, 18f, 315f, 280f);
 
     void Start()
     {
@@ -83,6 +91,10 @@ public class IrregularLevelRuntime : MonoBehaviour
         cubeMaterial = MakeMaterial(new Color(0.72f, 0.77f, 0.83f));
         playerMaterial = MakeMaterial(playerColor);
         axisMaterial = MakeMaterial(axisColor);
+        outlineMaterial = MakeMaterial(outlineColor);
+        outlineMaterial.EnableKeyword("_EMISSION");
+        outlineMaterial.SetColor("_EmissionColor", outlineEmission);
+        outlineMesh = CreateOutlineMesh();
         worldRoot = new GameObject("Loaded Irregular Level").transform;
         worldRoot.SetParent(transform, false);
         CreateAxisLine();
@@ -185,6 +197,61 @@ public class IrregularLevelRuntime : MonoBehaviour
         Collider collider = tokenObject.GetComponent<Collider>();
         if (collider != null) Destroy(collider);
         status = "Click an adjacent face to move. Q/E rotates the active layer.";
+        RefreshReachableHighlights();
+    }
+
+    void RefreshReachableHighlights()
+    {
+        foreach (GameObject highlight in reachableHighlights)
+            if (highlight != null) Destroy(highlight);
+        reachableHighlights.Clear();
+        if (currentCube == null || moving || rotating) return;
+
+        Vector3Int[] faceNormals =
+        {
+            Vector3Int.right, Vector3Int.left, Vector3Int.up,
+            Vector3Int.down, new Vector3Int(0, 0, 1), new Vector3Int(0, 0, -1)
+        };
+        foreach (Transform cube in cells.Values)
+        {
+            foreach (Vector3Int face in faceNormals)
+            {
+                if (!IsOpenFace(cube, face) || !IsAdjacent(cube, face)) continue;
+                var outline = new GameObject("Reachable Face Outline");
+                outline.transform.SetParent(cube, false);
+                outline.transform.localPosition = (Vector3)face * (0.5f + outlineSurfaceOffset);
+                Vector3 up = Mathf.Abs(face.x) > 0.5f ? Vector3.up
+                    : Mathf.Abs(face.y) > 0.5f ? Vector3.forward : Vector3.up;
+                outline.transform.localRotation = Quaternion.LookRotation(face, up);
+                outline.AddComponent<MeshFilter>().sharedMesh = outlineMesh;
+                outline.AddComponent<MeshRenderer>().sharedMaterial = outlineMaterial;
+                reachableHighlights.Add(outline);
+            }
+        }
+    }
+
+    Mesh CreateOutlineMesh()
+    {
+        float outer = 0.5f + outlineSurfaceOffset * 0.5f;
+        float inner = outer - outlineThickness;
+        var mesh = new Mesh { name = "Reachable Face Yellow Outline" };
+        mesh.vertices = new Vector3[]
+        {
+            new(-outer,inner,0), new(outer,inner,0), new(outer,outer,0), new(-outer,outer,0),
+            new(inner,-inner,0), new(outer,-inner,0), new(outer,inner,0), new(inner,inner,0),
+            new(-outer,-inner,0), new(-inner,-inner,0), new(-inner,inner,0), new(-outer,inner,0),
+            new(-outer,-outer,0), new(outer,-outer,0), new(outer,-inner,0), new(-outer,-inner,0)
+        };
+        mesh.triangles = new[]
+        {
+            0,1,2, 0,2,3,
+            4,5,6, 4,6,7,
+            8,9,10, 8,10,11,
+            12,13,14, 12,14,15
+        };
+        mesh.RecalculateNormals();
+        mesh.RecalculateBounds();
+        return mesh;
     }
 
     void CreateAxisLine()
@@ -247,19 +314,39 @@ public class IrregularLevelRuntime : MonoBehaviour
     bool PointerOverHud(Vector3 screenPoint)
     {
         float guiY = Screen.height - screenPoint.y;
-        return screenPoint.x < 350f && guiY < 300f;
+        return HudRect.Contains(new Vector2(screenPoint.x, guiY));
     }
 
     void TryMovePlayer(Vector3 screenPoint)
     {
-        if (playerToken == null || currentCube == null) return;
+        if (playerToken == null || currentCube == null)
+        {
+            status = "Player is not on a valid spawn face.";
+            return;
+        }
         Ray ray = viewCamera.ScreenPointToRay(screenPoint);
-        if (!Physics.Raycast(ray, out RaycastHit hit, 200f, viewCamera.cullingMask)) return;
+        if (!Physics.Raycast(ray, out RaycastHit hit, 200f, viewCamera.cullingMask))
+        {
+            status = "Click did not hit a grid face.";
+            return;
+        }
         Transform targetCube = hit.collider.transform;
-        if (targetCube.parent != worldRoot) return;
+        if (targetCube.parent != worldRoot)
+        {
+            status = "The clicked object is not a grid cube.";
+            return;
+        }
         Vector3Int targetFace = SnapToFace(targetCube.InverseTransformDirection(hit.normal));
-        if (!IsOpenFace(targetCube, targetFace)) return;
-        if (!IsAdjacent(targetCube, targetFace)) return;
+        if (!IsOpenFace(targetCube, targetFace))
+        {
+            status = "That face is blocked by another cube.";
+            return;
+        }
+        if (!IsAdjacent(targetCube, targetFace))
+        {
+            status = "That face is open, but it does not share an edge with the player's face.";
+            return;
+        }
         StartCoroutine(MovePlayer(targetCube, targetFace));
     }
 
@@ -272,20 +359,27 @@ public class IrregularLevelRuntime : MonoBehaviour
 
     bool IsAdjacent(Transform targetCube, Vector3Int targetFace)
     {
+        Vector3Int currentWorldNormal = SnapToFace(worldRoot.InverseTransformDirection(currentCube.TransformDirection(currentFace)));
+        Vector3Int targetWorldNormal = SnapToFace(worldRoot.InverseTransformDirection(targetCube.TransformDirection(targetFace)));
         if (targetCube == currentCube)
+            return DotInt(currentWorldNormal, targetWorldNormal) == 0;
+
+        Vector3Int cellDelta = LocalToCell(targetCube.localPosition) - LocalToCell(currentCube.localPosition);
+        if (currentWorldNormal == targetWorldNormal)
         {
-            Vector3 from = currentCube.TransformDirection(currentFace).normalized;
-            Vector3 to = targetCube.TransformDirection(targetFace).normalized;
-            return Mathf.Abs(Vector3.Dot(from, to)) < 0.01f;
+            int gridDistance = Mathf.Abs(cellDelta.x) + Mathf.Abs(cellDelta.y) + Mathf.Abs(cellDelta.z);
+            return gridDistance == 1 && DotInt(cellDelta, currentWorldNormal) == 0;
         }
-        Vector3 currentNormalWorld = currentCube.TransformDirection(currentFace).normalized;
-        Vector3 targetNormalWorld = targetCube.TransformDirection(targetFace).normalized;
-        Vector3 currentFaceCenter = currentCube.TransformPoint((Vector3)currentFace * 0.5f);
-        Vector3 targetFaceCenter = targetCube.TransformPoint((Vector3)targetFace * 0.5f);
-        float distance = Vector3.Distance(currentFaceCenter, targetFaceCenter);
-        return Vector3.Dot(currentNormalWorld, targetNormalWorld) > 0.99f
-            && Mathf.Abs(distance - cellSize) < cellSize * 0.12f;
+
+        if (DotInt(currentWorldNormal, targetWorldNormal) != 0) return false;
+
+        // Perpendicular face cells can share an edge across a level change too.
+        // Doubled face-center coordinates keep this check exact on the integer grid.
+        Vector3Int doubledFaceCenterDelta = cellDelta * 2 + targetWorldNormal - currentWorldNormal;
+        return DotInt(doubledFaceCenterDelta, doubledFaceCenterDelta) == 2;
     }
+
+    static int DotInt(Vector3Int a, Vector3Int b) => a.x * b.x + a.y * b.y + a.z * b.z;
 
     IEnumerator MovePlayer(Transform targetCube, Vector3Int targetFace)
     {
@@ -320,6 +414,8 @@ public class IrregularLevelRuntime : MonoBehaviour
         currentCube = targetCube;
         currentFace = targetFace;
         moving = false;
+        RefreshReachableHighlights();
+        status = $"Moved to {LocalToCell(currentCube.localPosition)}, face {currentFace}.";
     }
 
     static Vector3Int SnapToFace(Vector3 value)
@@ -403,6 +499,7 @@ public class IrregularLevelRuntime : MonoBehaviour
         rotating = false;
         UpdateAxisLine();
         UpdateCamera();
+        RefreshReachableHighlights();
         status = $"Rotated {layer.name} by {turns * 90}°. Player follows its cube if it moved.";
     }
 
@@ -452,9 +549,10 @@ public class IrregularLevelRuntime : MonoBehaviour
             titleStyle = new GUIStyle(GUI.skin.label) { fontSize = 20, fontStyle = FontStyle.Bold, normal = { textColor = Color.white } };
             bodyStyle = new GUIStyle(GUI.skin.label) { fontSize = 12, wordWrap = true, normal = { textColor = new Color(0.82f, 0.87f, 0.94f) } };
         }
-        GUILayout.BeginArea(new Rect(18, 18, 315, 280), GUI.skin.box);
+        GUILayout.BeginArea(HudRect, GUI.skin.box);
         GUILayout.Label("Irregular World — Play", titleStyle);
         GUILayout.Label("Click an adjacent cube face to move. Right-drag to orbit; wheel to zoom.", bodyStyle);
+        GUILayout.Label("Yellow outlines show the faces you can move to next.", bodyStyle);
         GUILayout.Space(8);
         GUILayout.Label($"Player: {(currentCube == null ? "not spawned" : $"{LocalToCell(currentCube.localPosition)} · face {currentFace}")}", bodyStyle);
         GUILayout.Label($"Active layer: {(ActiveLayer == null ? "none" : ActiveLayer.name)}", bodyStyle);
