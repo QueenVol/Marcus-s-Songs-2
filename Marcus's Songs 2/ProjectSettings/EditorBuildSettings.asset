@@ -4,5 +4,11 @@
 EditorBuildSettings:
   m_ObjectHideFlags: 0
   serializedVersion: 2
-  m_Scenes: []
+  m_Scenes:
+  - enabled: 1
+    path: Assets/Scenes/IrregularLevelEditor.unity
+    guid: d92d9957924cef14c8c4971582557fc9
+  - enabled: 1
+    path: Assets/Scenes/IrregularLevelPlay.unity
+    guid: e90bb3297cdb4aa6a90ac1e32ad422f1
   m_configObjects: {}

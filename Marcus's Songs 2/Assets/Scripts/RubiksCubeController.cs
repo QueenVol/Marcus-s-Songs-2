@@ -49,7 +49,6 @@ public class RubiksCubeController : MonoBehaviour
     public float CellSpacing => cubieSpacing;
     public float FaceExtent => cubieScale*.5f;
     public int OuterLayer => size/2;
-
     void Start()
     {
         size = Mathf.Max(3, size | 1);

@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using System.IO;
 using UnityEngine;
+using UnityEngine.SceneManagement;
 
 /// <summary>
 /// A small runtime level-editing prototype for sparse, grid-aligned cube worlds.
@@ -16,6 +17,9 @@ public class IrregularLevelEditor : MonoBehaviour
     {
         public List<Vector3Int> cells = new List<Vector3Int>();
         public List<SavedLayer> layers = new List<SavedLayer>();
+        public List<Vector3Int> rotatingCells;
+        public int axis;
+        public Vector3Int axisPoint;
         public bool hasSpawnPoint;
         public Vector3Int spawnPoint;
         public Vector3Int spawnFaceNormal = Vector3Int.up;
@@ -88,7 +92,12 @@ public class IrregularLevelEditor : MonoBehaviour
         gridMaterial = MakeMaterial(gridColor);
         spawnPointMaterial = MakeMaterial(spawnPointColor);
         CreateAxisLine();
-        if (loadExampleOnStart) CreateExample();
+        if (loadExampleOnStart)
+        {
+            string savePath = Path.Combine(Application.persistentDataPath, "MarcusSongs_IrregularLevel.json");
+            if (File.Exists(savePath)) LoadLevel();
+            else CreateExample();
+        }
         UpdateCamera();
         UpdateAxisLine();
     }
@@ -126,7 +135,7 @@ public class IrregularLevelEditor : MonoBehaviour
         AddLayer("Layer 1");
         foreach (Vector3Int cell in example)
             if (cell.x == 0) SetSelected(cell, true);
-        SetSpawnPoint(new Vector3Int(0, 0, 0), Vector3Int.up);
+        SetSpawnPoint(new Vector3Int(0, 2, 0), Vector3Int.up);
     }
 
     void AddCell(Vector3Int cell)
@@ -497,7 +506,7 @@ public class IrregularLevelEditor : MonoBehaviour
         if (GUILayout.Toggle(mode == EditMode.Erase, "Erase", GUI.skin.button)) mode = EditMode.Erase;
         GUILayout.EndHorizontal();
         GUILayout.Label(mode == EditMode.SetSpawnPoint
-            ? "Click a cube to set the player start. The gold marker shows the current spawn point."
+            ? "Click a cube face to set the player start. The gold tile marks that face."
             : "Click a cube to use the selected mode.", hintStyle);
         GUILayout.Label(spawnCube == null
             ? "Player spawn: not set"
@@ -606,6 +615,11 @@ public class IrregularLevelEditor : MonoBehaviour
         if (GUILayout.Button("Save level")) SaveLevel();
         if (GUILayout.Button("Load level")) LoadLevel();
         GUILayout.EndHorizontal();
+        if (GUILayout.Button("Play saved level"))
+        {
+            SaveLevel();
+            SceneManager.LoadScene("IrregularLevelPlay");
+        }
 
         GUILayout.Space(8);
         GUILayout.Label(status, hintStyle);
@@ -682,15 +696,24 @@ public class IrregularLevelEditor : MonoBehaviour
         cells.Clear();
         layers.Clear(); activeLayerIndex = -1;
         foreach (Vector3Int cell in data.cells) AddCell(cell);
-        if (data.layers != null)
+        if (data.layers != null && data.layers.Count > 0)
             foreach (SavedLayer saved in data.layers)
             {
                 AddLayer(string.IsNullOrEmpty(saved.name) ? $"Layer {layers.Count + 1}" : saved.name);
                 ActiveLayer.axis = (Axis)Mathf.Clamp(saved.axis, 0, 2);
                 ActiveLayer.axisPoint = saved.axisPoint;
-                foreach (Vector3Int cell in saved.cells)
-                    if (cells.TryGetValue(cell, out Transform cube) && !ActiveLayer.cubes.Contains(cube)) ActiveLayer.cubes.Add(cube);
+                if (saved.cells != null)
+                    foreach (Vector3Int cell in saved.cells)
+                        if (cells.TryGetValue(cell, out Transform cube) && !ActiveLayer.cubes.Contains(cube)) ActiveLayer.cubes.Add(cube);
             }
+        else if (data.rotatingCells != null && data.rotatingCells.Count > 0)
+        {
+            AddLayer("Layer 1");
+            ActiveLayer.axis = (Axis)Mathf.Clamp(data.axis, 0, 2);
+            ActiveLayer.axisPoint = data.axisPoint;
+            foreach (Vector3Int cell in data.rotatingCells)
+                if (cells.TryGetValue(cell, out Transform cube)) ActiveLayer.cubes.Add(cube);
+        }
         if (data.hasSpawnPoint && cells.ContainsKey(data.spawnPoint)) SetSpawnPoint(data.spawnPoint, data.spawnFaceNormal);
         RefreshCellColors();
         UpdateAxisLine();
