@@ -447,14 +447,34 @@ public class IrregularLevelRuntime : MonoBehaviour
         RuntimeLayer layer = ActiveLayer;
         if (layer == null || layer.cubes.Count == 0) { reason = "The active layer has no cubes."; return false; }
         var movingCubes = new HashSet<Transform>(layer.cubes);
-        var destinations = new HashSet<Vector3Int>();
-        foreach (Transform cube in layer.cubes)
+        var occupiedAfterTurn = new HashSet<Vector3Int>();
+        foreach (KeyValuePair<Vector3Int, Transform> entry in cells)
         {
-            if (cube == null) continue;
-            Vector3Int destination = RotateCell(LocalToCell(cube.localPosition), layer, turns);
-            if (!destinations.Add(destination)) { reason = "Rotation blocked: two cubes would overlap."; return false; }
-            if (cells.TryGetValue(destination, out Transform occupant) && !movingCubes.Contains(occupant))
-            { reason = $"Rotation blocked by cube at {destination}."; return false; }
+            Vector3Int destination = movingCubes.Contains(entry.Value)
+                ? RotateCell(entry.Key, layer, turns)
+                : entry.Key;
+            if (!occupiedAfterTurn.Add(destination))
+            {
+                reason = "Rotation blocked: two cubes would overlap.";
+                return false;
+            }
+        }
+
+        if (currentCube != null && playerToken != null)
+        {
+            Vector3Int playerCell = LocalToCell(currentCube.localPosition);
+            Vector3Int playerFaceWorld = SnapToFace(worldRoot.InverseTransformDirection(currentCube.TransformDirection(currentFace)));
+            if (movingCubes.Contains(currentCube))
+            {
+                playerCell = RotateCell(playerCell, layer, turns);
+                playerFaceWorld = RotateOffset(playerFaceWorld, layer.axis, turns);
+            }
+
+            if (occupiedAfterTurn.Contains(playerCell + playerFaceWorld))
+            {
+                reason = "Rotation blocked: it would cover the player's face and trap them inside a cube.";
+                return false;
+            }
         }
         reason = "Ready.";
         return true;
@@ -505,15 +525,20 @@ public class IrregularLevelRuntime : MonoBehaviour
 
     Vector3Int RotateCell(Vector3Int cell, RuntimeLayer layer, int turns)
     {
-        Vector3Int p = cell - layer.axisPoint;
+        return RotateOffset(cell - layer.axisPoint, layer.axis, turns) + layer.axisPoint;
+    }
+
+    static Vector3Int RotateOffset(Vector3Int offset, Axis axis, int turns)
+    {
+        Vector3Int p = offset;
         turns = ((turns % 4) + 4) % 4;
         for (int i = 0; i < turns; i++)
         {
-            if (layer.axis == Axis.X) p = new Vector3Int(p.x, -p.z, p.y);
-            else if (layer.axis == Axis.Y) p = new Vector3Int(p.z, p.y, -p.x);
+            if (axis == Axis.X) p = new Vector3Int(p.x, -p.z, p.y);
+            else if (axis == Axis.Y) p = new Vector3Int(p.z, p.y, -p.x);
             else p = new Vector3Int(-p.y, p.x, p.z);
         }
-        return p + layer.axisPoint;
+        return p;
     }
 
     static Vector3 AxisVector(Axis axis)
