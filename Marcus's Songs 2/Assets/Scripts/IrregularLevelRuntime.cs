@@ -70,8 +70,9 @@ public class IrregularLevelRuntime : MonoBehaviour
     Material cubeMaterial, playerMaterial, axisMaterial, outlineMaterial;
     Mesh outlineMesh;
     LineRenderer axisLine;
+    readonly List<LineRenderer> layerOutlineEdges = new List<LineRenderer>();
     GUIStyle titleStyle, bodyStyle;
-    string status = "Click an adjacent face to move. Q/E rotates the active layer.";
+    string status = "Click an adjacent face to move. Use the arrows beside the active layer to turn it.";
 
     RuntimeLayer ActiveLayer => activeLayerIndex >= 0 && activeLayerIndex < layers.Count ? layers[activeLayerIndex] : null;
     static Rect HudRect => new Rect(18f, 18f, 315f, 280f);
@@ -98,6 +99,7 @@ public class IrregularLevelRuntime : MonoBehaviour
         worldRoot = new GameObject("Loaded Irregular Level").transform;
         worldRoot.SetParent(transform, false);
         CreateAxisLine();
+        CreateLayerOutline();
         LoadLevel();
     }
 
@@ -169,6 +171,7 @@ public class IrregularLevelRuntime : MonoBehaviour
         }
         else status = "Level loaded, but no valid player spawn face is set. Set one in the editor and save again.";
         UpdateAxisLine();
+        UpdateLayerOutline();
         UpdateCamera();
     }
 
@@ -196,7 +199,7 @@ public class IrregularLevelRuntime : MonoBehaviour
         tokenObject.GetComponent<Renderer>().sharedMaterial = playerMaterial;
         Collider collider = tokenObject.GetComponent<Collider>();
         if (collider != null) Destroy(collider);
-        status = "Click an adjacent face to move. Q/E rotates the active layer.";
+        status = "Click an adjacent face to move. Use the arrows beside the active layer to turn it.";
         RefreshReachableHighlights();
     }
 
@@ -205,7 +208,7 @@ public class IrregularLevelRuntime : MonoBehaviour
         foreach (GameObject highlight in reachableHighlights)
             if (highlight != null) Destroy(highlight);
         reachableHighlights.Clear();
-        if (currentCube == null || moving || rotating) return;
+        if (currentCube == null || moving) return;
 
         Vector3Int[] faceNormals =
         {
@@ -283,6 +286,96 @@ public class IrregularLevelRuntime : MonoBehaviour
         axisLine.SetPosition(1, center + offset);
     }
 
+    void CreateLayerOutline()
+    {
+        Material outlineLineMaterial = new Material(Shader.Find("Sprites/Default"));
+        Color color = new Color(1f, 0.78f, 0.18f, 1f);
+        for (int i = 0; i < 12; i++)
+        {
+            var edgeObject = new GameObject($"Active Layer Outline Edge {i + 1}");
+            edgeObject.transform.SetParent(worldRoot, false);
+            LineRenderer edge = edgeObject.AddComponent<LineRenderer>();
+            edge.useWorldSpace = true;
+            edge.positionCount = 2;
+            edge.startWidth = cellSize * 0.04f;
+            edge.endWidth = cellSize * 0.04f;
+            edge.material = outlineLineMaterial;
+            edge.startColor = color;
+            edge.endColor = color;
+            edge.enabled = false;
+            layerOutlineEdges.Add(edge);
+        }
+    }
+
+    void UpdateLayerOutline()
+    {
+        RuntimeLayer layer = ActiveLayer;
+        if (rotating || layer == null || layer.cubes.Count == 0)
+        {
+            foreach (LineRenderer edge in layerOutlineEdges) edge.enabled = false;
+            return;
+        }
+        Vector3Int min = new Vector3Int(int.MaxValue, int.MaxValue, int.MaxValue);
+        Vector3Int max = new Vector3Int(int.MinValue, int.MinValue, int.MinValue);
+        foreach (Transform cube in layer.cubes)
+        {
+            if (cube == null) continue;
+            Vector3Int cell = LocalToCell(cube.localPosition);
+            min = Vector3Int.Min(min, cell);
+            max = Vector3Int.Max(max, cell);
+        }
+        if (min.x == int.MaxValue)
+        {
+            foreach (LineRenderer edge in layerOutlineEdges) edge.enabled = false;
+            return;
+        }
+        // Grid cubes are scaled to 94% of a cell, so their surfaces end at 0.47 cells.
+        // Add only a tiny offset to keep the outline visible without making it float.
+        Vector3 padding = Vector3.one * 0.472f;
+        Vector3 low = (Vector3)min - padding;
+        Vector3 high = (Vector3)max + padding;
+        Vector3[] corners =
+        {
+            new(low.x, low.y, low.z), new(high.x, low.y, low.z),
+            new(high.x, high.y, low.z), new(low.x, high.y, low.z),
+            new(low.x, low.y, high.z), new(high.x, low.y, high.z),
+            new(high.x, high.y, high.z), new(low.x, high.y, high.z)
+        };
+        int[,] edges =
+        {
+            { 0, 1 }, { 1, 2 }, { 2, 3 }, { 3, 0 },
+            { 4, 5 }, { 5, 6 }, { 6, 7 }, { 7, 4 },
+            { 0, 4 }, { 1, 5 }, { 2, 6 }, { 3, 7 }
+        };
+        for (int i = 0; i < layerOutlineEdges.Count; i++)
+        {
+            LineRenderer edge = layerOutlineEdges[i];
+            edge.enabled = true;
+            edge.SetPosition(0, worldRoot.TransformPoint(corners[edges[i, 0]] * cellSize));
+            edge.SetPosition(1, worldRoot.TransformPoint(corners[edges[i, 1]] * cellSize));
+        }
+    }
+
+    Vector2 RotationButtonsCenter()
+    {
+        if (viewCamera == null || ActiveLayer == null) return Vector2.zero;
+        Vector3 screen = viewCamera.WorldToScreenPoint(worldRoot.TransformPoint(CellToLocal(ActiveLayer.axisPoint)));
+        return new Vector2(screen.x, Screen.height - screen.y);
+    }
+
+    Rect RotationButtonRect(int direction)
+    {
+        Vector2 center = RotationButtonsCenter();
+        return new Rect(center.x + direction * 42f - 18f, center.y - 18f, 36f, 36f);
+    }
+
+    bool PointerOverRotationButtons(Vector3 screenPoint)
+    {
+        Vector2 guiPoint = new Vector2(screenPoint.x, Screen.height - screenPoint.y);
+        return (CanRotate(-1, out _) && RotationButtonRect(-1).Contains(guiPoint))
+            || (CanRotate(1, out _) && RotationButtonRect(1).Contains(guiPoint));
+    }
+
     void Update()
     {
         if (viewCamera == null) return;
@@ -303,12 +396,10 @@ public class IrregularLevelRuntime : MonoBehaviour
             UpdateCamera();
         }
 
-        if (Input.GetKeyDown(KeyCode.Q)) RotateActiveLayer(-1);
-        if (Input.GetKeyDown(KeyCode.E)) RotateActiveLayer(1);
         for (int i = 0; i < Mathf.Min(9, layers.Count); i++)
             if (Input.GetKeyDown((KeyCode)((int)KeyCode.Alpha1 + i))) SelectLayer(i);
 
-        if (!moving && !rotating && Input.GetMouseButtonDown(0) && !PointerOverHud(Input.mousePosition)) TryMovePlayer(Input.mousePosition);
+        if (!moving && !rotating && Input.GetMouseButtonDown(0) && !PointerOverHud(Input.mousePosition) && !PointerOverRotationButtons(Input.mousePosition)) TryMovePlayer(Input.mousePosition);
     }
 
     bool PointerOverHud(Vector3 screenPoint)
@@ -384,6 +475,8 @@ public class IrregularLevelRuntime : MonoBehaviour
     IEnumerator MovePlayer(Transform targetCube, Vector3Int targetFace)
     {
         moving = true;
+        RefreshReachableHighlights();
+        UpdateLayerOutline();
         Vector3 start = playerToken.position;
         Vector3 end = targetCube.TransformPoint((Vector3)targetFace * playerHeight);
         Vector3 control = Vector3.zero;
@@ -415,6 +508,7 @@ public class IrregularLevelRuntime : MonoBehaviour
         currentFace = targetFace;
         moving = false;
         RefreshReachableHighlights();
+        UpdateLayerOutline();
         status = $"Moved to {LocalToCell(currentCube.localPosition)}, face {currentFace}.";
     }
 
@@ -432,7 +526,8 @@ public class IrregularLevelRuntime : MonoBehaviour
         if (index < 0 || index >= layers.Count) return;
         activeLayerIndex = index;
         UpdateAxisLine();
-        status = $"Active layer: {ActiveLayer.name}. Q/E rotates it by 90°.";
+        UpdateLayerOutline();
+        status = $"Active layer: {ActiveLayer.name}. Click a nearby arrow to turn it by 90°.";
     }
 
     void RotateActiveLayer(int quarterTurns)
@@ -483,6 +578,7 @@ public class IrregularLevelRuntime : MonoBehaviour
     IEnumerator AnimateRotation(int turns)
     {
         rotating = true;
+        UpdateLayerOutline();
         RuntimeLayer layer = ActiveLayer;
         var oldPositions = new Dictionary<Transform, Vector3Int>();
         foreach (Transform cube in layer.cubes)
@@ -518,6 +614,7 @@ public class IrregularLevelRuntime : MonoBehaviour
         Destroy(pivot.gameObject);
         rotating = false;
         UpdateAxisLine();
+        UpdateLayerOutline();
         UpdateCamera();
         RefreshReachableHighlights();
         status = $"Rotated {layer.name} by {turns * 90}°. Player follows its cube if it moved.";
@@ -588,10 +685,17 @@ public class IrregularLevelRuntime : MonoBehaviour
             for (int i = 0; i < layers.Count; i++) names[i] = $"{i + 1}: {layers[i].name}";
             int picked = GUILayout.SelectionGrid(activeLayerIndex, names, 2);
             if (picked != activeLayerIndex) SelectLayer(picked);
-            GUILayout.Label("Keys 1–9 select a layer · Q/E rotate it ±90°", bodyStyle);
+            GUILayout.Label("Keys 1–9 select a layer · click the arrows beside it to rotate ±90°", bodyStyle);
         }
         GUILayout.Space(8);
         GUILayout.Label(status, bodyStyle);
         GUILayout.EndArea();
+
+        if (ActiveLayer != null && !moving && !rotating)
+        {
+            GUIStyle arrowStyle = new GUIStyle(GUI.skin.button) { fontSize = 23, fontStyle = FontStyle.Bold };
+            if (CanRotate(-1, out _) && GUI.Button(RotationButtonRect(-1), "↺", arrowStyle)) RotateActiveLayer(-1);
+            if (CanRotate(1, out _) && GUI.Button(RotationButtonRect(1), "↻", arrowStyle)) RotateActiveLayer(1);
+        }
     }
 }
