@@ -66,12 +66,15 @@ public class IrregularLevelRuntime : MonoBehaviour
     Vector3Int currentFace = Vector3Int.up;
     int activeLayerIndex;
     bool moving, rotating, rotatingView;
+    float viewQuarterTurns;
     float orbitYaw = 45f, orbitPitch = 30f, orbitDistance = 12f;
+    Vector3 cameraCenter;
     Material cubeMaterial, playerMaterial, axisMaterial, outlineMaterial;
     Mesh outlineMesh;
     LineRenderer axisLine;
     readonly List<LineRenderer> layerOutlineEdges = new List<LineRenderer>();
-    GUIStyle titleStyle, bodyStyle;
+    GUIStyle titleStyle, bodyStyle, rotationButtonStyle;
+    Texture2D rotationButtonBackground;
     string status = "Click an adjacent face to move. Use the arrows beside the active layer to turn it.";
 
     RuntimeLayer ActiveLayer => activeLayerIndex >= 0 && activeLayerIndex < layers.Count ? layers[activeLayerIndex] : null;
@@ -170,6 +173,7 @@ public class IrregularLevelRuntime : MonoBehaviour
             }
         }
         else status = "Level loaded, but no valid player spawn face is set. Set one in the editor and save again.";
+        SetInitialCameraCenter();
         UpdateAxisLine();
         UpdateLayerOutline();
         UpdateCamera();
@@ -356,24 +360,96 @@ public class IrregularLevelRuntime : MonoBehaviour
         }
     }
 
-    Vector2 RotationButtonsCenter()
-    {
-        if (viewCamera == null || ActiveLayer == null) return Vector2.zero;
-        Vector3 screen = viewCamera.WorldToScreenPoint(worldRoot.TransformPoint(CellToLocal(ActiveLayer.axisPoint)));
-        return new Vector2(screen.x, Screen.height - screen.y);
-    }
-
     Rect RotationButtonRect(int direction)
     {
-        Vector2 center = RotationButtonsCenter();
-        return new Rect(center.x + direction * 42f - 18f, center.y - 18f, 36f, 36f);
+        RuntimeLayer layer = ActiveLayer;
+        if (viewCamera == null || layer == null || layer.cubes.Count == 0)
+            return new Rect(direction < 0 ? 12f : Screen.width - 56f, Screen.height * 0.5f - 20f, 44f, 40f);
+
+        Vector3Int min = new Vector3Int(int.MaxValue, int.MaxValue, int.MaxValue);
+        Vector3Int max = new Vector3Int(int.MinValue, int.MinValue, int.MinValue);
+        foreach (Transform cube in layer.cubes)
+        {
+            if (cube == null) continue;
+            Vector3Int cell = LocalToCell(cube.localPosition);
+            min = Vector3Int.Min(min, cell);
+            max = Vector3Int.Max(max, cell);
+        }
+        if (min.x == int.MaxValue)
+            return new Rect(direction < 0 ? 12f : Screen.width - 56f, Screen.height * 0.5f - 20f, 44f, 40f);
+
+        Vector3 low = (Vector3)min - Vector3.one * 0.54f;
+        Vector3 high = (Vector3)max + Vector3.one * 0.54f;
+        float minX = float.PositiveInfinity, minY = float.PositiveInfinity;
+        float maxX = float.NegativeInfinity, maxY = float.NegativeInfinity;
+        for (int x = 0; x < 2; x++)
+        for (int y = 0; y < 2; y++)
+        for (int z = 0; z < 2; z++)
+        {
+            Vector3 corner = new Vector3(x == 0 ? low.x : high.x, y == 0 ? low.y : high.y, z == 0 ? low.z : high.z);
+            Vector3 projected = viewCamera.WorldToScreenPoint(worldRoot.TransformPoint(corner * cellSize));
+            if (projected.z <= 0f) continue;
+            float guiY = Screen.height - projected.y;
+            minX = Mathf.Min(minX, projected.x);
+            maxX = Mathf.Max(maxX, projected.x);
+            minY = Mathf.Min(minY, guiY);
+            maxY = Mathf.Max(maxY, guiY);
+        }
+
+        const float buttonWidth = 44f;
+        const float buttonHeight = 40f;
+        if (float.IsInfinity(minX))
+            return new Rect(direction < 0 ? 12f : Screen.width - 56f, Screen.height * 0.5f - 20f, buttonWidth, buttonHeight);
+
+        Vector2[] cornerAnchors =
+        {
+            new Vector2(minX, minY - buttonHeight * 0.5f - 8f),
+            new Vector2(maxX, minY - buttonHeight * 0.5f - 8f),
+            new Vector2(maxX, maxY + buttonHeight * 0.5f + 8f),
+            new Vector2(minX, maxY + buttonHeight * 0.5f + 8f)
+        };
+        // At the reference view, clockwise is bottom-right and counterclockwise is top-left.
+        // Each 90-degree camera turn moves both anchors with the projected rotation plane.
+        float cornerPosition = Mathf.Repeat((direction < 0 ? 0f : 2f) - viewQuarterTurns, 4f);
+        int firstCorner = Mathf.FloorToInt(cornerPosition);
+        int nextCorner = (firstCorner + 1) % 4;
+        Vector2 anchor = Vector2.Lerp(cornerAnchors[firstCorner], cornerAnchors[nextCorner], cornerPosition - firstCorner);
+        float left = Mathf.Clamp(anchor.x - buttonWidth * 0.5f, 12f, Screen.width - buttonWidth - 12f);
+        float top = Mathf.Clamp(anchor.y - buttonHeight * 0.5f, 12f, Screen.height - buttonHeight - 12f);
+        return new Rect(left, top, buttonWidth, buttonHeight);
+    }
+
+    void EnsureRotationButtonStyle()
+    {
+        if (rotationButtonStyle != null) return;
+        rotationButtonBackground = new Texture2D(1, 1, TextureFormat.RGBA32, false)
+        {
+            name = "White Rotation Button Background",
+            filterMode = FilterMode.Point,
+            wrapMode = TextureWrapMode.Clamp
+        };
+        rotationButtonBackground.SetPixel(0, 0, new Color(0.72f, 0.77f, 0.83f, 1f));
+        rotationButtonBackground.Apply();
+        Color markColor = new Color(0.12f, 0.16f, 0.22f);
+        rotationButtonStyle = new GUIStyle(GUI.skin.button)
+        {
+            fontSize = 21,
+            fontStyle = FontStyle.Bold,
+            alignment = TextAnchor.MiddleCenter,
+            padding = new RectOffset(0, 0, 0, 0),
+            border = new RectOffset(0, 0, 0, 0),
+            normal = { background = rotationButtonBackground, textColor = markColor },
+            hover = { background = rotationButtonBackground, textColor = markColor },
+            active = { background = rotationButtonBackground, textColor = markColor },
+            focused = { background = rotationButtonBackground, textColor = markColor }
+        };
     }
 
     bool PointerOverRotationButtons(Vector3 screenPoint)
     {
         Vector2 guiPoint = new Vector2(screenPoint.x, Screen.height - screenPoint.y);
-        return (CanRotate(-1, out _) && RotationButtonRect(-1).Contains(guiPoint))
-            || (CanRotate(1, out _) && RotationButtonRect(1).Contains(guiPoint));
+        return (CanRotate(1, out _) && RotationButtonRect(-1).Contains(guiPoint))
+            || (CanRotate(-1, out _) && RotationButtonRect(1).Contains(guiPoint));
     }
 
     void Update()
@@ -410,6 +486,8 @@ public class IrregularLevelRuntime : MonoBehaviour
         rotatingView = true;
         float startYaw = orbitYaw;
         float targetYaw = startYaw + degrees;
+        float startQuarterTurns = viewQuarterTurns;
+        float targetQuarterTurns = startQuarterTurns + (degrees > 0f ? 1f : -1f);
         float elapsed = 0f;
         while (elapsed < viewTurnDuration)
         {
@@ -417,10 +495,12 @@ public class IrregularLevelRuntime : MonoBehaviour
             float t = Mathf.Clamp01(elapsed / viewTurnDuration);
             float smooth = t * t * (3f - 2f * t);
             orbitYaw = Mathf.Lerp(startYaw, targetYaw, smooth);
+            viewQuarterTurns = Mathf.Lerp(startQuarterTurns, targetQuarterTurns, smooth);
             UpdateCamera();
             yield return null;
         }
         orbitYaw = Mathf.Repeat(targetYaw, 360f);
+        viewQuarterTurns = targetQuarterTurns;
         UpdateCamera();
         rotatingView = false;
     }
@@ -667,18 +747,28 @@ public class IrregularLevelRuntime : MonoBehaviour
 
     void UpdateCamera()
     {
-        Vector3 center = Vector3.zero;
-        if (cells.Count > 0)
-        {
-            Vector3 min = new Vector3(float.PositiveInfinity, float.PositiveInfinity, float.PositiveInfinity);
-            Vector3 max = new Vector3(float.NegativeInfinity, float.NegativeInfinity, float.NegativeInfinity);
-            foreach (Vector3Int cell in cells.Keys) { Vector3 p = CellToLocal(cell); min = Vector3.Min(min, p); max = Vector3.Max(max, p); }
-            center = (min + max) * 0.5f;
-        }
         Quaternion orbit = Quaternion.Euler(orbitPitch, orbitYaw, 0f);
-        viewCamera.transform.position = center + orbit * new Vector3(0f, 0f, -orbitDistance);
+        viewCamera.transform.position = cameraCenter + orbit * new Vector3(0f, 0f, -orbitDistance);
         viewCamera.transform.rotation = orbit;
         viewCamera.fieldOfView = 45f;
+    }
+
+    void SetInitialCameraCenter()
+    {
+        if (cells.Count == 0)
+        {
+            cameraCenter = Vector3.zero;
+            return;
+        }
+        Vector3 min = new Vector3(float.PositiveInfinity, float.PositiveInfinity, float.PositiveInfinity);
+        Vector3 max = new Vector3(float.NegativeInfinity, float.NegativeInfinity, float.NegativeInfinity);
+        foreach (Vector3Int cell in cells.Keys)
+        {
+            Vector3 position = CellToLocal(cell);
+            min = Vector3.Min(min, position);
+            max = Vector3.Max(max, position);
+        }
+        cameraCenter = (min + max) * 0.5f;
     }
 
     void OnGUI()
@@ -710,9 +800,9 @@ public class IrregularLevelRuntime : MonoBehaviour
 
         if (ActiveLayer != null && !moving && !rotating)
         {
-            GUIStyle arrowStyle = new GUIStyle(GUI.skin.button) { fontSize = 23, fontStyle = FontStyle.Bold };
-            if (CanRotate(-1, out _) && GUI.Button(RotationButtonRect(-1), "↺", arrowStyle)) RotateActiveLayer(-1);
-            if (CanRotate(1, out _) && GUI.Button(RotationButtonRect(1), "↻", arrowStyle)) RotateActiveLayer(1);
+            EnsureRotationButtonStyle();
+            if (CanRotate(1, out _) && GUI.Button(RotationButtonRect(-1), "↺", rotationButtonStyle)) RotateActiveLayer(1);
+            if (CanRotate(-1, out _) && GUI.Button(RotationButtonRect(1), "↻", rotationButtonStyle)) RotateActiveLayer(-1);
         }
     }
 }
