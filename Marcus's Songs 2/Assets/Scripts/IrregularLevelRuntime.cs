@@ -366,57 +366,104 @@ public class IrregularLevelRuntime : MonoBehaviour
         if (viewCamera == null || layer == null || layer.cubes.Count == 0)
             return new Rect(direction < 0 ? 12f : Screen.width - 56f, Screen.height * 0.5f - 20f, 44f, 40f);
 
-        Vector3Int min = new Vector3Int(int.MaxValue, int.MaxValue, int.MaxValue);
-        Vector3Int max = new Vector3Int(int.MinValue, int.MinValue, int.MinValue);
+        const float buttonWidth = 44f;
+        const float buttonHeight = 40f;
+        float minX = float.PositiveInfinity, minY = float.PositiveInfinity;
+        float maxX = float.NegativeInfinity, maxY = float.NegativeInfinity;
         foreach (Transform cube in layer.cubes)
         {
             if (cube == null) continue;
-            Vector3Int cell = LocalToCell(cube.localPosition);
-            min = Vector3Int.Min(min, cell);
-            max = Vector3Int.Max(max, cell);
+            for (int x = 0; x < 2; x++)
+            for (int y = 0; y < 2; y++)
+            for (int z = 0; z < 2; z++)
+            {
+                Vector3 localCorner = new Vector3(x == 0 ? -0.5f : 0.5f, y == 0 ? -0.5f : 0.5f, z == 0 ? -0.5f : 0.5f);
+                Vector3 projected = viewCamera.WorldToScreenPoint(cube.TransformPoint(localCorner));
+                if (projected.z <= 0f) continue;
+                float guiY = Screen.height - projected.y;
+                minX = Mathf.Min(minX, projected.x);
+                maxX = Mathf.Max(maxX, projected.x);
+                minY = Mathf.Min(minY, guiY);
+                maxY = Mathf.Max(maxY, guiY);
+            }
         }
-        if (min.x == int.MaxValue)
-            return new Rect(direction < 0 ? 12f : Screen.width - 56f, Screen.height * 0.5f - 20f, 44f, 40f);
-
-        Vector3 low = (Vector3)min - Vector3.one * 0.54f;
-        Vector3 high = (Vector3)max + Vector3.one * 0.54f;
-        float minX = float.PositiveInfinity, minY = float.PositiveInfinity;
-        float maxX = float.NegativeInfinity, maxY = float.NegativeInfinity;
-        for (int x = 0; x < 2; x++)
-        for (int y = 0; y < 2; y++)
-        for (int z = 0; z < 2; z++)
-        {
-            Vector3 corner = new Vector3(x == 0 ? low.x : high.x, y == 0 ? low.y : high.y, z == 0 ? low.z : high.z);
-            Vector3 projected = viewCamera.WorldToScreenPoint(worldRoot.TransformPoint(corner * cellSize));
-            if (projected.z <= 0f) continue;
-            float guiY = Screen.height - projected.y;
-            minX = Mathf.Min(minX, projected.x);
-            maxX = Mathf.Max(maxX, projected.x);
-            minY = Mathf.Min(minY, guiY);
-            maxY = Mathf.Max(maxY, guiY);
-        }
-
-        const float buttonWidth = 44f;
-        const float buttonHeight = 40f;
         if (float.IsInfinity(minX))
             return new Rect(direction < 0 ? 12f : Screen.width - 56f, Screen.height * 0.5f - 20f, buttonWidth, buttonHeight);
 
-        Vector2[] cornerAnchors =
+        // Horizontal rotation planes (Y axis) use their left/right edges.
+        // Vertical planes keep the existing four-corner layout. The active
+        // layer's own projected bounds determine its exact positions.
+        if (layer.axis == Axis.Y)
+        {
+            const float minimumSideSpan = 72f;
+            if (maxX - minX < minimumSideSpan)
+            {
+                float centerX = (minX + maxX) * 0.5f;
+                minX = centerX - minimumSideSpan * 0.5f;
+                maxX = centerX + minimumSideSpan * 0.5f;
+            }
+            float gap = 8f;
+            float centerY = (minY + maxY) * 0.5f;
+            float sideLeft = direction < 0 ? minX - buttonWidth - gap : maxX + gap;
+            sideLeft = Mathf.Clamp(sideLeft, 12f, Screen.width - buttonWidth - 12f);
+            float sideTop = Mathf.Clamp(centerY - buttonHeight * 0.5f, 12f, Screen.height - buttonHeight - 12f);
+            return new Rect(sideLeft, sideTop, buttonWidth, buttonHeight);
+        }
+
+        // Preserve the four-corner mapping for slices whose projection is
+        // taller than it is wide, including a minimum span for edge-on views.
+        const float minimumSpan = 104f;
+        if (maxX - minX < minimumSpan)
+        {
+            float centerX = (minX + maxX) * 0.5f;
+            minX = centerX - minimumSpan * 0.5f;
+            maxX = centerX + minimumSpan * 0.5f;
+        }
+        if (maxY - minY < minimumSpan)
+        {
+            float centerY = (minY + maxY) * 0.5f;
+            minY = centerY - minimumSpan * 0.5f;
+            maxY = centerY + minimumSpan * 0.5f;
+        }
+        Vector2[] corners =
         {
             new Vector2(minX, minY - buttonHeight * 0.5f - 8f),
             new Vector2(maxX, minY - buttonHeight * 0.5f - 8f),
             new Vector2(maxX, maxY + buttonHeight * 0.5f + 8f),
             new Vector2(minX, maxY + buttonHeight * 0.5f + 8f)
         };
-        // At the reference view, clockwise is bottom-right and counterclockwise is top-left.
-        // Each 90-degree camera turn moves both anchors with the projected rotation plane.
-        float cornerPosition = Mathf.Repeat((direction < 0 ? 0f : 2f) - viewQuarterTurns, 4f);
-        int firstCorner = Mathf.FloorToInt(cornerPosition);
-        int nextCorner = (firstCorner + 1) % 4;
-        Vector2 anchor = Vector2.Lerp(cornerAnchors[firstCorner], cornerAnchors[nextCorner], cornerPosition - firstCorner);
+        float position = Mathf.Repeat((direction < 0 ? 0f : 2f) - viewQuarterTurns, 4f);
+        int first = Mathf.FloorToInt(position), second = (first + 1) % 4;
+        Vector2 anchor = Vector2.Lerp(corners[first], corners[second], position - first);
         float left = Mathf.Clamp(anchor.x - buttonWidth * 0.5f, 12f, Screen.width - buttonWidth - 12f);
         float top = Mathf.Clamp(anchor.y - buttonHeight * 0.5f, 12f, Screen.height - buttonHeight - 12f);
         return new Rect(left, top, buttonWidth, buttonHeight);
+    }
+
+    int GetClockwiseTurnSign(RuntimeLayer layer)
+    {
+        if (layer == null || viewCamera == null) return -1;
+        Vector3 axis = worldRoot.TransformDirection(AxisVector(layer.axis)).normalized;
+        Vector3 axisOrigin = worldRoot.TransformPoint(CellToLocal(layer.axisPoint));
+        Vector3 radial = Vector3.zero;
+        float farthest = 0f;
+        foreach (Transform cube in layer.cubes)
+        {
+            if (cube == null) continue;
+            Vector3 candidate = Vector3.ProjectOnPlane(cube.position - axisOrigin, axis);
+            if (candidate.sqrMagnitude > farthest) { farthest = candidate.sqrMagnitude; radial = candidate; }
+        }
+        if (farthest > 0.0001f)
+        {
+            Vector3 center = viewCamera.WorldToScreenPoint(axisOrigin);
+            Vector3 start = viewCamera.WorldToScreenPoint(axisOrigin + radial);
+            Vector3 turned = viewCamera.WorldToScreenPoint(axisOrigin + Quaternion.AngleAxis(10f, axis) * radial);
+            Vector2 a = new Vector2(start.x - center.x, start.y - center.y);
+            Vector2 b = new Vector2(turned.x - center.x, turned.y - center.y);
+            float signedArea = a.x * b.y - a.y * b.x;
+            if (Mathf.Abs(signedArea) > 0.001f) return signedArea < 0f ? 1 : -1;
+        }
+        return Vector3.Dot(axis, viewCamera.transform.position - axisOrigin) >= 0f ? -1 : 1;
     }
 
     void EnsureRotationButtonStyle()
@@ -448,8 +495,9 @@ public class IrregularLevelRuntime : MonoBehaviour
     bool PointerOverRotationButtons(Vector3 screenPoint)
     {
         Vector2 guiPoint = new Vector2(screenPoint.x, Screen.height - screenPoint.y);
-        return (CanRotate(1, out _) && RotationButtonRect(-1).Contains(guiPoint))
-            || (CanRotate(-1, out _) && RotationButtonRect(1).Contains(guiPoint));
+        int clockwiseTurns = GetClockwiseTurnSign(ActiveLayer);
+        return (CanRotate(-clockwiseTurns, out _) && RotationButtonRect(-1).Contains(guiPoint))
+            || (CanRotate(clockwiseTurns, out _) && RotationButtonRect(1).Contains(guiPoint));
     }
 
     void Update()
@@ -801,8 +849,9 @@ public class IrregularLevelRuntime : MonoBehaviour
         if (ActiveLayer != null && !moving && !rotating)
         {
             EnsureRotationButtonStyle();
-            if (CanRotate(1, out _) && GUI.Button(RotationButtonRect(-1), "↺", rotationButtonStyle)) RotateActiveLayer(1);
-            if (CanRotate(-1, out _) && GUI.Button(RotationButtonRect(1), "↻", rotationButtonStyle)) RotateActiveLayer(-1);
+            int clockwiseTurns = GetClockwiseTurnSign(ActiveLayer);
+            if (CanRotate(-clockwiseTurns, out _) && GUI.Button(RotationButtonRect(-1), "↺", rotationButtonStyle)) RotateActiveLayer(-clockwiseTurns);
+            if (CanRotate(clockwiseTurns, out _) && GUI.Button(RotationButtonRect(1), "↻", rotationButtonStyle)) RotateActiveLayer(clockwiseTurns);
         }
     }
 }
