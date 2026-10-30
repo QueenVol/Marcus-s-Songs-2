@@ -56,6 +56,7 @@ public class IrregularLevelRuntime : MonoBehaviour
     [SerializeField] Color backgroundColor = new Color(0.055f, 0.075f, 0.12f);
     [SerializeField] Color axisColor = new Color(0.12f, 0.64f, 1f);
     [SerializeField] float turnDuration = 0.4f;
+    [SerializeField, Min(0.01f)] float viewTurnDuration = 0.28f;
 
     readonly Dictionary<Vector3Int, Transform> cells = new Dictionary<Vector3Int, Transform>();
     readonly List<RuntimeLayer> layers = new List<RuntimeLayer>();
@@ -64,9 +65,8 @@ public class IrregularLevelRuntime : MonoBehaviour
     Transform worldRoot, playerToken, currentCube;
     Vector3Int currentFace = Vector3Int.up;
     int activeLayerIndex;
-    bool moving, rotating;
-    float orbitYaw = -34f, orbitPitch = 24f, orbitDistance = 12f;
-    Vector2 lastMouse;
+    bool moving, rotating, rotatingView;
+    float orbitYaw = 45f, orbitPitch = 30f, orbitDistance = 12f;
     Material cubeMaterial, playerMaterial, axisMaterial, outlineMaterial;
     Mesh outlineMesh;
     LineRenderer axisLine;
@@ -379,16 +379,8 @@ public class IrregularLevelRuntime : MonoBehaviour
     void Update()
     {
         if (viewCamera == null) return;
-        if (Input.GetMouseButtonDown(1) && !PointerOverHud(Input.mousePosition)) lastMouse = Input.mousePosition;
-        if (Input.GetMouseButton(1) && !PointerOverHud(Input.mousePosition))
-        {
-            Vector2 mouse = Input.mousePosition;
-            Vector2 delta = mouse - lastMouse;
-            orbitYaw += delta.x * 0.35f;
-            orbitPitch = Mathf.Clamp(orbitPitch - delta.y * 0.25f, -10f, 70f);
-            lastMouse = mouse;
-            UpdateCamera();
-        }
+        if (!rotatingView && Input.GetKeyDown(KeyCode.Q)) RotateView(90f);
+        if (!rotatingView && Input.GetKeyDown(KeyCode.E)) RotateView(-90f);
         float scroll = Input.mouseScrollDelta.y;
         if (Mathf.Abs(scroll) > 0.01f && !PointerOverHud(Input.mousePosition))
         {
@@ -406,6 +398,31 @@ public class IrregularLevelRuntime : MonoBehaviour
     {
         float guiY = Screen.height - screenPoint.y;
         return HudRect.Contains(new Vector2(screenPoint.x, guiY));
+    }
+
+    void RotateView(float degrees)
+    {
+        StartCoroutine(AnimateViewTurn(degrees));
+    }
+
+    IEnumerator AnimateViewTurn(float degrees)
+    {
+        rotatingView = true;
+        float startYaw = orbitYaw;
+        float targetYaw = startYaw + degrees;
+        float elapsed = 0f;
+        while (elapsed < viewTurnDuration)
+        {
+            elapsed += Time.deltaTime;
+            float t = Mathf.Clamp01(elapsed / viewTurnDuration);
+            float smooth = t * t * (3f - 2f * t);
+            orbitYaw = Mathf.Lerp(startYaw, targetYaw, smooth);
+            UpdateCamera();
+            yield return null;
+        }
+        orbitYaw = Mathf.Repeat(targetYaw, 360f);
+        UpdateCamera();
+        rotatingView = false;
     }
 
     void TryMovePlayer(Vector3 screenPoint)
@@ -673,7 +690,7 @@ public class IrregularLevelRuntime : MonoBehaviour
         }
         GUILayout.BeginArea(HudRect, GUI.skin.box);
         GUILayout.Label("Irregular World — Play", titleStyle);
-        GUILayout.Label("Click an adjacent cube face to move. Right-drag to orbit; wheel to zoom.", bodyStyle);
+        GUILayout.Label("Click an adjacent cube face to move. Press Q/E to rotate the view by 90°; wheel to zoom.", bodyStyle);
         GUILayout.Label("Yellow outlines show the faces you can move to next.", bodyStyle);
         GUILayout.Space(8);
         GUILayout.Label($"Player: {(currentCube == null ? "not spawned" : $"{LocalToCell(currentCube.localPosition)} · face {currentFace}")}", bodyStyle);
