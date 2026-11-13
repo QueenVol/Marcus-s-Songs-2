@@ -37,7 +37,6 @@ public class IrregularLevelRuntime : MonoBehaviour
         public string name;
         public Axis axis;
         public Vector3Int axisPoint;
-        public readonly List<Transform> cubes = new List<Transform>();
     }
 
     [Header("Level data")]
@@ -148,17 +147,28 @@ public class IrregularLevelRuntime : MonoBehaviour
                     axis = (Axis)Mathf.Clamp(saved.axis, 0, 2),
                     axisPoint = saved.axisPoint
                 };
-                if (saved.cells != null)
+                if (saved.cells != null && saved.cells.Count > 0)
+                {
+                    var counts = new Dictionary<int, int>();
                     foreach (Vector3Int cell in saved.cells)
-                        if (cells.TryGetValue(cell, out Transform cube) && !layer.cubes.Contains(cube)) layer.cubes.Add(cube);
+                    {
+                        int coordinate = AxisCoordinate(cell, layer.axis);
+                        counts[coordinate] = counts.TryGetValue(coordinate, out int count) ? count + 1 : 1;
+                    }
+                    int slice = AxisCoordinate(layer.axisPoint, layer.axis);
+                    int highestCount = 0;
+                    foreach (KeyValuePair<int, int> pair in counts)
+                        if (pair.Value > highestCount) { slice = pair.Key; highestCount = pair.Value; }
+                    SetAxisCoordinate(ref layer.axisPoint, layer.axis, slice);
+                }
                 layers.Add(layer);
             }
         }
         else if (data.rotatingCells != null && data.rotatingCells.Count > 0)
         {
             var legacyLayer = new RuntimeLayer { name = "Layer 1", axis = (Axis)Mathf.Clamp(data.axis, 0, 2), axisPoint = data.axisPoint };
-            foreach (Vector3Int cell in data.rotatingCells)
-                if (cells.TryGetValue(cell, out Transform cube)) legacyLayer.cubes.Add(cube);
+            if (data.rotatingCells.Count > 0)
+                SetAxisCoordinate(ref legacyLayer.axisPoint, legacyLayer.axis, AxisCoordinate(data.rotatingCells[0], legacyLayer.axis));
             layers.Add(legacyLayer);
         }
         if (layers.Count > 0) activeLayerIndex = 0;
@@ -314,14 +324,15 @@ public class IrregularLevelRuntime : MonoBehaviour
     void UpdateLayerOutline()
     {
         RuntimeLayer layer = ActiveLayer;
-        if (rotating || layer == null || layer.cubes.Count == 0)
+        List<Transform> layerCubes = GetLayerCubes(layer);
+        if (rotating || layerCubes.Count == 0)
         {
             foreach (LineRenderer edge in layerOutlineEdges) edge.enabled = false;
             return;
         }
         Vector3Int min = new Vector3Int(int.MaxValue, int.MaxValue, int.MaxValue);
         Vector3Int max = new Vector3Int(int.MinValue, int.MinValue, int.MinValue);
-        foreach (Transform cube in layer.cubes)
+        foreach (Transform cube in layerCubes)
         {
             if (cube == null) continue;
             Vector3Int cell = LocalToCell(cube.localPosition);
@@ -363,14 +374,15 @@ public class IrregularLevelRuntime : MonoBehaviour
     Rect RotationButtonRect(int direction)
     {
         RuntimeLayer layer = ActiveLayer;
-        if (viewCamera == null || layer == null || layer.cubes.Count == 0)
+        List<Transform> layerCubes = GetLayerCubes(layer);
+        if (viewCamera == null || layerCubes.Count == 0)
             return new Rect(direction < 0 ? 12f : Screen.width - 56f, Screen.height * 0.5f - 20f, 44f, 40f);
 
         const float buttonWidth = 44f;
         const float buttonHeight = 40f;
         float minX = float.PositiveInfinity, minY = float.PositiveInfinity;
         float maxX = float.NegativeInfinity, maxY = float.NegativeInfinity;
-        foreach (Transform cube in layer.cubes)
+        foreach (Transform cube in layerCubes)
         {
             if (cube == null) continue;
             for (int x = 0; x < 2; x++)
@@ -443,11 +455,12 @@ public class IrregularLevelRuntime : MonoBehaviour
     int GetClockwiseTurnSign(RuntimeLayer layer)
     {
         if (layer == null || viewCamera == null) return -1;
+        List<Transform> layerCubes = GetLayerCubes(layer);
         Vector3 axis = worldRoot.TransformDirection(AxisVector(layer.axis)).normalized;
         Vector3 axisOrigin = worldRoot.TransformPoint(CellToLocal(layer.axisPoint));
         Vector3 radial = Vector3.zero;
         float farthest = 0f;
-        foreach (Transform cube in layer.cubes)
+        foreach (Transform cube in layerCubes)
         {
             if (cube == null) continue;
             Vector3 candidate = Vector3.ProjectOnPlane(cube.position - axisOrigin, axis);
@@ -685,8 +698,9 @@ public class IrregularLevelRuntime : MonoBehaviour
     bool CanRotate(int turns, out string reason)
     {
         RuntimeLayer layer = ActiveLayer;
-        if (layer == null || layer.cubes.Count == 0) { reason = "The active layer has no cubes."; return false; }
-        var movingCubes = new HashSet<Transform>(layer.cubes);
+        List<Transform> layerCubes = GetLayerCubes(layer);
+        if (layerCubes.Count == 0) { reason = "The active layer has no cubes."; return false; }
+        var movingCubes = new HashSet<Transform>(layerCubes);
         var occupiedAfterTurn = new HashSet<Vector3Int>();
         foreach (KeyValuePair<Vector3Int, Transform> entry in cells)
         {
@@ -725,14 +739,15 @@ public class IrregularLevelRuntime : MonoBehaviour
         rotating = true;
         UpdateLayerOutline();
         RuntimeLayer layer = ActiveLayer;
+        List<Transform> layerCubes = GetLayerCubes(layer);
         var oldPositions = new Dictionary<Transform, Vector3Int>();
-        foreach (Transform cube in layer.cubes)
+        foreach (Transform cube in layerCubes)
             if (cube != null) oldPositions[cube] = LocalToCell(cube.localPosition);
         var pivot = new GameObject("Layer Turn Pivot").transform;
         pivot.SetParent(worldRoot, false);
         pivot.localPosition = CellToLocal(layer.axisPoint);
         pivot.localRotation = Quaternion.identity;
-        foreach (Transform cube in layer.cubes)
+        foreach (Transform cube in layerCubes)
             if (cube != null) cube.SetParent(pivot, true);
         Vector3 direction = AxisVector(layer.axis);
         Quaternion from = pivot.localRotation;
@@ -746,7 +761,7 @@ public class IrregularLevelRuntime : MonoBehaviour
         }
         pivot.localRotation = to;
         foreach (KeyValuePair<Transform, Vector3Int> entry in oldPositions) cells.Remove(entry.Value);
-        foreach (Transform cube in layer.cubes)
+        foreach (Transform cube in layerCubes)
         {
             if (cube == null) continue;
             cube.SetParent(worldRoot, true);
@@ -768,6 +783,24 @@ public class IrregularLevelRuntime : MonoBehaviour
     Vector3Int RotateCell(Vector3Int cell, RuntimeLayer layer, int turns)
     {
         return RotateOffset(cell - layer.axisPoint, layer.axis, turns) + layer.axisPoint;
+    }
+
+    List<Transform> GetLayerCubes(RuntimeLayer layer)
+    {
+        var result = new List<Transform>();
+        if (layer == null) return result;
+        int slice = AxisCoordinate(layer.axisPoint, layer.axis);
+        foreach (KeyValuePair<Vector3Int, Transform> entry in cells)
+            if (AxisCoordinate(entry.Key, layer.axis) == slice) result.Add(entry.Value);
+        return result;
+    }
+
+    static int AxisCoordinate(Vector3Int cell, Axis axis) => axis == Axis.X ? cell.x : axis == Axis.Y ? cell.y : cell.z;
+    static void SetAxisCoordinate(ref Vector3Int cell, Axis axis, int value)
+    {
+        if (axis == Axis.X) cell.x = value;
+        else if (axis == Axis.Y) cell.y = value;
+        else cell.z = value;
     }
 
     static Vector3Int RotateOffset(Vector3Int offset, Axis axis, int turns)

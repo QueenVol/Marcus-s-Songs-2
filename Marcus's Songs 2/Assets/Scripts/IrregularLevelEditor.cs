@@ -9,7 +9,7 @@ using UnityEngine.SceneManagement;
 /// </summary>
 public class IrregularLevelEditor : MonoBehaviour
 {
-    public enum EditMode { Place, SelectLayer, SetSpawnPoint, Erase }
+    public enum EditMode { Place, SetSpawnPoint, Erase }
     public enum Axis { X, Y, Z }
 
     [System.Serializable]
@@ -39,7 +39,6 @@ public class IrregularLevelEditor : MonoBehaviour
         public string name;
         public Axis axis = Axis.X;
         public Vector3Int axisPoint;
-        public readonly List<Transform> cubes = new List<Transform>();
     }
 
     [Header("Grid")]
@@ -64,7 +63,7 @@ public class IrregularLevelEditor : MonoBehaviour
     Transform spawnCube;
     Transform spawnMarker;
     Vector3Int spawnFaceNormal = Vector3Int.up;
-    EditMode mode = EditMode.SelectLayer;
+    EditMode mode = EditMode.Place;
     Vector3Int placementCoordinate = new Vector3Int(3, 0, 0);
     string placementX = "3", placementY = "0", placementZ = "0";
     bool rotating;
@@ -72,7 +71,7 @@ public class IrregularLevelEditor : MonoBehaviour
     Vector2 lastMouse;
     Vector2 panelScroll;
     GUIStyle titleStyle, hintStyle;
-    string status = "Select cubes to define a rotating layer.";
+    string status = "Choose a grid slice to define a rotating layer.";
 
     RotationLayer ActiveLayer => activeLayerIndex >= 0 && activeLayerIndex < layers.Count ? layers[activeLayerIndex] : null;
 
@@ -133,8 +132,6 @@ public class IrregularLevelEditor : MonoBehaviour
         };
         foreach (Vector3Int cell in example) AddCell(cell);
         AddLayer("Layer 1");
-        foreach (Vector3Int cell in example)
-            if (cell.x == 0) SetSelected(cell, true);
         SetSpawnPoint(new Vector3Int(0, 2, 0), Vector3Int.up);
     }
 
@@ -157,7 +154,6 @@ public class IrregularLevelEditor : MonoBehaviour
         if (!cells.TryGetValue(cell, out Transform cube)) return;
         cells.Remove(cell);
         if (spawnCube == cube) SetSpawnPoint(null);
-        foreach (RotationLayer layer in layers) layer.cubes.Remove(cube);
         Destroy(cube.gameObject);
         if (viewCamera != null) UpdateCamera();
     }
@@ -168,19 +164,16 @@ public class IrregularLevelEditor : MonoBehaviour
         Mathf.RoundToInt(local.y / cellSize),
         Mathf.RoundToInt(local.z / cellSize));
 
-    void SetSelected(Vector3Int cell, bool selected)
+    List<Transform> GetLayerCubes(RotationLayer layer)
     {
-        if (ActiveLayer == null || !cells.TryGetValue(cell, out Transform cube)) return;
-        if (selected)
-        {
-            if (!ActiveLayer.cubes.Contains(cube)) ActiveLayer.cubes.Add(cube);
-        }
-        else
-        {
-            ActiveLayer.cubes.Remove(cube);
-        }
-        UpdateCellColor(cell);
+        var result = new List<Transform>();
+        if (layer == null) return result;
+        foreach (KeyValuePair<Vector3Int, Transform> entry in cells)
+            if (AxisCoordinate(entry.Key, layer.axis) == AxisCoordinate(layer.axisPoint, layer.axis)) result.Add(entry.Value);
+        return result;
     }
+
+    static int AxisCoordinate(Vector3Int cell, Axis axis) => axis == Axis.X ? cell.x : axis == Axis.Y ? cell.y : cell.z;
 
     void AddLayer(string layerName)
     {
@@ -230,7 +223,7 @@ public class IrregularLevelEditor : MonoBehaviour
     void UpdateCellColor(Vector3Int cell)
     {
         if (!cells.TryGetValue(cell, out Transform cube)) return;
-        bool selected = ActiveLayer != null && ActiveLayer.cubes.Contains(cube);
+        bool selected = ActiveLayer != null && AxisCoordinate(LocalToCell(cube.localPosition), ActiveLayer.axis) == AxisCoordinate(ActiveLayer.axisPoint, ActiveLayer.axis);
         cube.GetComponent<Renderer>().sharedMaterial = selected ? selectedMaterial : cubeMaterial;
     }
 
@@ -286,15 +279,16 @@ public class IrregularLevelEditor : MonoBehaviour
     bool CanRotate(int quarterTurns, out string reason)
     {
         RotationLayer layer = ActiveLayer;
-        if (layer == null || layer.cubes.Count == 0)
+        List<Transform> layerCubes = GetLayerCubes(layer);
+        if (layerCubes.Count == 0)
         {
-            reason = "Select at least one cube for the rotating layer.";
+            reason = "There are no cubes on the active layer slice.";
             return false;
         }
 
         var destinations = new HashSet<Vector3Int>();
-        var movingCubes = new HashSet<Transform>(layer.cubes);
-        foreach (Transform cube in layer.cubes)
+        var movingCubes = new HashSet<Transform>(layerCubes);
+        foreach (Transform cube in layerCubes)
         {
             if (cube == null) continue;
             Vector3Int source = LocalToCell(cube.localPosition);
@@ -334,15 +328,16 @@ public class IrregularLevelEditor : MonoBehaviour
     {
         rotating = true;
         RotationLayer layer = ActiveLayer;
+        List<Transform> layerCubes = GetLayerCubes(layer);
         var originalPositions = new Dictionary<Transform, Vector3Int>();
-        foreach (Transform cube in layer.cubes)
+        foreach (Transform cube in layerCubes)
             if (cube != null) originalPositions[cube] = LocalToCell(cube.localPosition);
 
         var pivot = new GameObject("Temporary Layer Pivot").transform;
         pivot.SetParent(transform, false);
         pivot.localPosition = CellToLocal(layer.axisPoint);
         pivot.localRotation = Quaternion.identity;
-        foreach (Transform cube in layer.cubes)
+        foreach (Transform cube in layerCubes)
             if (cube != null) cube.SetParent(pivot, true);
 
         Vector3 axisDirection = AxisVector(layer.axis);
@@ -359,7 +354,7 @@ public class IrregularLevelEditor : MonoBehaviour
 
         foreach (KeyValuePair<Transform, Vector3Int> entry in originalPositions)
             cells.Remove(entry.Value);
-        foreach (Transform cube in layer.cubes)
+        foreach (Transform cube in layerCubes)
         {
             if (cube == null) continue;
             cube.SetParent(transform, true);
@@ -375,7 +370,9 @@ public class IrregularLevelEditor : MonoBehaviour
         Destroy(pivot.gameObject);
         rotating = false;
         UpdateCamera();
-        status = $"Rotated {layer.name}: {layer.cubes.Count} cubes by {quarterTurns * 90}°.";
+        RefreshCellColors();
+        UpdateAxisLine();
+        status = $"Rotated {layer.name}: {layerCubes.Count} cubes by {quarterTurns * 90}°.";
     }
 
     void Update()
@@ -421,9 +418,7 @@ public class IrregularLevelEditor : MonoBehaviour
         Transform cube = hit.collider.transform;
         if (cube.parent != transform) return;
         Vector3Int cell = LocalToCell(cube.localPosition);
-        if (mode == EditMode.SelectLayer)
-            SetSelected(cell, ActiveLayer != null && ActiveLayer.cubes.Contains(cube) == false);
-        else if (mode == EditMode.SetSpawnPoint)
+        if (mode == EditMode.SetSpawnPoint)
         {
             Vector3Int faceNormal = SnapToFace(cube.InverseTransformDirection(hit.normal));
             SetSpawnPoint(cell, faceNormal);
@@ -496,12 +491,11 @@ public class IrregularLevelEditor : MonoBehaviour
         GUILayout.BeginArea(new Rect(18, 18, 310, Screen.height - 36), GUI.skin.box);
         panelScroll = GUILayout.BeginScrollView(panelScroll, GUILayout.Width(290), GUILayout.Height(Screen.height - 56));
         GUILayout.Label("Irregular Cube Level Editor", titleStyle);
-        GUILayout.Label("Unlimited grid · selected cubes rotate 90° around the blue axis", hintStyle);
+        GUILayout.Label("Unlimited grid · the active grid slice rotates 90° around the blue axis", hintStyle);
         GUILayout.Space(8);
         GUILayout.Label($"Mode: {mode}");
         GUILayout.BeginHorizontal();
         if (GUILayout.Toggle(mode == EditMode.Place, "Place", GUI.skin.button)) mode = EditMode.Place;
-        if (GUILayout.Toggle(mode == EditMode.SelectLayer, "Select layer", GUI.skin.button)) mode = EditMode.SelectLayer;
         if (GUILayout.Toggle(mode == EditMode.SetSpawnPoint, "Set spawn", GUI.skin.button)) mode = EditMode.SetSpawnPoint;
         if (GUILayout.Toggle(mode == EditMode.Erase, "Erase", GUI.skin.button)) mode = EditMode.Erase;
         GUILayout.EndHorizontal();
@@ -534,12 +528,12 @@ public class IrregularLevelEditor : MonoBehaviour
                 RefreshCellColors(); UpdateAxisLine();
             }
         }
-        else GUILayout.Label("Create a layer to select cubes and rotate them.", hintStyle);
+        else GUILayout.Label("Create a layer, then choose its axis and grid slice.", hintStyle);
 
         RotationLayer active = ActiveLayer;
         using (new GUIEnabledScope(active != null))
         {
-        GUILayout.Label(active == null ? "Rotation axis: —" : $"{active.name} axis: {active.axis}");
+        GUILayout.Label(active == null ? "Rotation axis: —" : $"{active.name}: {active.axis} axis slice");
         GUILayout.BeginHorizontal();
         if (GUILayout.Toggle(active != null && active.axis == Axis.X, "X axis", GUI.skin.button)) active.axis = Axis.X;
         if (GUILayout.Toggle(active != null && active.axis == Axis.Y, "Y axis", GUI.skin.button)) active.axis = Axis.Y;
@@ -547,20 +541,24 @@ public class IrregularLevelEditor : MonoBehaviour
         GUILayout.EndHorizontal();
         if (active != null && active.axis == Axis.X)
         {
+            active.axisPoint.x = AxisCoordinateRow("Layer X", active.axisPoint.x);
             active.axisPoint.y = AxisCoordinateRow("Axis Y", active.axisPoint.y);
             active.axisPoint.z = AxisCoordinateRow("Axis Z", active.axisPoint.z);
         }
         else if (active != null && active.axis == Axis.Y)
         {
             active.axisPoint.x = AxisCoordinateRow("Axis X", active.axisPoint.x);
+            active.axisPoint.y = AxisCoordinateRow("Layer Y", active.axisPoint.y);
             active.axisPoint.z = AxisCoordinateRow("Axis Z", active.axisPoint.z);
         }
         else if (active != null)
         {
             active.axisPoint.x = AxisCoordinateRow("Axis X", active.axisPoint.x);
             active.axisPoint.y = AxisCoordinateRow("Axis Y", active.axisPoint.y);
+            active.axisPoint.z = AxisCoordinateRow("Layer Z", active.axisPoint.z);
         }
         UpdateAxisLine();
+        RefreshCellColors();
         }
 
         GUILayout.Space(8);
@@ -595,15 +593,9 @@ public class IrregularLevelEditor : MonoBehaviour
         using (new GUIEnabledScope(!rotating && active != null && CanRotate(-1, out _)))
             if (GUILayout.Button("Rotate -90°", GUILayout.Height(34))) RotateLayer(-1);
         GUILayout.EndHorizontal();
-        GUILayout.Label($"Active layer cubes: {(active == null ? 0 : active.cubes.Count)}", hintStyle);
+        GUILayout.Label($"Cubes currently in layer: {(active == null ? 0 : GetLayerCubes(active).Count)}", hintStyle);
 
         GUILayout.Space(8);
-        if (GUILayout.Button("Clear selection"))
-        {
-            if (active != null) active.cubes.Clear();
-            RefreshCellColors();
-            status = "Layer selection cleared.";
-        }
         if (GUILayout.Button("Reset example"))
         {
             foreach (Transform cube in new List<Transform>(cells.Values)) Destroy(cube.gameObject);
@@ -667,8 +659,6 @@ public class IrregularLevelEditor : MonoBehaviour
         foreach (RotationLayer layer in layers)
         {
             var saved = new SavedLayer { name = layer.name, axis = (int)layer.axis, axisPoint = layer.axisPoint };
-            foreach (Transform cube in layer.cubes)
-                if (cube != null) saved.cells.Add(LocalToCell(cube.localPosition));
             data.layers.Add(saved);
         }
         string path = Path.Combine(Application.persistentDataPath, "MarcusSongs_IrregularLevel.json");
@@ -702,17 +692,37 @@ public class IrregularLevelEditor : MonoBehaviour
                 AddLayer(string.IsNullOrEmpty(saved.name) ? $"Layer {layers.Count + 1}" : saved.name);
                 ActiveLayer.axis = (Axis)Mathf.Clamp(saved.axis, 0, 2);
                 ActiveLayer.axisPoint = saved.axisPoint;
-                if (saved.cells != null)
+                // Older saves stored a manually selected group. Migrate it to the most common
+                // coordinate along the layer axis so it becomes a spatial slice.
+                if (saved.cells != null && saved.cells.Count > 0)
+                {
+                    var counts = new Dictionary<int, int>();
                     foreach (Vector3Int cell in saved.cells)
-                        if (cells.TryGetValue(cell, out Transform cube) && !ActiveLayer.cubes.Contains(cube)) ActiveLayer.cubes.Add(cube);
+                    {
+                        int coordinate = AxisCoordinate(cell, ActiveLayer.axis);
+                        counts[coordinate] = counts.TryGetValue(coordinate, out int count) ? count + 1 : 1;
+                    }
+                    int slice = ActiveLayer.axis == Axis.X ? ActiveLayer.axisPoint.x : ActiveLayer.axis == Axis.Y ? ActiveLayer.axisPoint.y : ActiveLayer.axisPoint.z;
+                    int highestCount = 0;
+                    foreach (KeyValuePair<int, int> pair in counts)
+                        if (pair.Value > highestCount) { slice = pair.Key; highestCount = pair.Value; }
+                    if (ActiveLayer.axis == Axis.X) ActiveLayer.axisPoint.x = slice;
+                    else if (ActiveLayer.axis == Axis.Y) ActiveLayer.axisPoint.y = slice;
+                    else ActiveLayer.axisPoint.z = slice;
+                }
             }
         else if (data.rotatingCells != null && data.rotatingCells.Count > 0)
         {
             AddLayer("Layer 1");
             ActiveLayer.axis = (Axis)Mathf.Clamp(data.axis, 0, 2);
             ActiveLayer.axisPoint = data.axisPoint;
-            foreach (Vector3Int cell in data.rotatingCells)
-                if (cells.TryGetValue(cell, out Transform cube)) ActiveLayer.cubes.Add(cube);
+            if (data.rotatingCells.Count > 0)
+            {
+                int slice = AxisCoordinate(data.rotatingCells[0], ActiveLayer.axis);
+                if (ActiveLayer.axis == Axis.X) ActiveLayer.axisPoint.x = slice;
+                else if (ActiveLayer.axis == Axis.Y) ActiveLayer.axisPoint.y = slice;
+                else ActiveLayer.axisPoint.z = slice;
+            }
         }
         if (data.hasSpawnPoint && cells.ContainsKey(data.spawnPoint)) SetSpawnPoint(data.spawnPoint, data.spawnFaceNormal);
         RefreshCellColors();
