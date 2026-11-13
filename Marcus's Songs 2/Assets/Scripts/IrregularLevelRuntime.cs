@@ -70,6 +70,7 @@ public class IrregularLevelRuntime : MonoBehaviour
     [SerializeField] Color axisColor = new Color(0.12f, 0.64f, 1f);
     [SerializeField] float turnDuration = 0.4f;
     [SerializeField, Min(0.01f)] float viewTurnDuration = 0.28f;
+    [SerializeField, Min(0.1f)] float cameraPanSpeed = 7f;
 
     readonly Dictionary<Vector3Int, Transform> cells = new Dictionary<Vector3Int, Transform>();
     readonly List<BlockedFaceData> blockedFaces = new List<BlockedFaceData>();
@@ -88,12 +89,12 @@ public class IrregularLevelRuntime : MonoBehaviour
     Mesh outlineMesh;
     LineRenderer axisLine;
     readonly List<LineRenderer> layerOutlineEdges = new List<LineRenderer>();
-    GUIStyle titleStyle, bodyStyle, rotationButtonStyle;
+    GUIStyle bodyStyle, rotationButtonStyle;
     Texture2D rotationButtonBackground;
     string status = "Click an adjacent face to move. Use the arrows beside the active layer to turn it.";
 
     RuntimeLayer ActiveLayer => activeLayerIndex >= 0 && activeLayerIndex < layers.Count ? layers[activeLayerIndex] : null;
-    static Rect HudRect => new Rect(18f, 18f, 315f, 310f);
+    static Rect HudRect => new Rect(18f, 18f, 315f, 210f);
 
     void Start()
     {
@@ -592,8 +593,25 @@ public class IrregularLevelRuntime : MonoBehaviour
     void Update()
     {
         if (viewCamera == null) return;
+        if (Input.GetKeyDown(KeyCode.R))
+        {
+            SceneManager.LoadScene(SceneManager.GetActiveScene().name);
+            return;
+        }
         if (!rotatingView && Input.GetKeyDown(KeyCode.Q)) RotateView(90f);
         if (!rotatingView && Input.GetKeyDown(KeyCode.E)) RotateView(-90f);
+        Vector2 panInput = new Vector2(
+            (Input.GetKey(KeyCode.D) ? 1f : 0f) - (Input.GetKey(KeyCode.A) ? 1f : 0f),
+            (Input.GetKey(KeyCode.W) ? 1f : 0f) - (Input.GetKey(KeyCode.S) ? 1f : 0f));
+        if (panInput.sqrMagnitude > 0f)
+        {
+            panInput = Vector2.ClampMagnitude(panInput, 1f);
+            Quaternion yaw = Quaternion.Euler(0f, orbitYaw, 0f);
+            float speed = cameraPanSpeed * (Input.GetKey(KeyCode.LeftShift) || Input.GetKey(KeyCode.RightShift) ? 2f : 1f);
+            Vector3 panDirection = yaw * new Vector3(panInput.x, 0f, panInput.y);
+            cameraCenter += panDirection * speed * Time.deltaTime;
+            UpdateCamera();
+        }
         float scroll = Input.mouseScrollDelta.y;
         if (Mathf.Abs(scroll) > 0.01f && !PointerOverHud(Input.mousePosition))
         {
@@ -955,30 +973,15 @@ public class IrregularLevelRuntime : MonoBehaviour
 
     void OnGUI()
     {
-        if (titleStyle == null)
+        if (bodyStyle == null)
         {
-            titleStyle = new GUIStyle(GUI.skin.label) { fontSize = 20, fontStyle = FontStyle.Bold, normal = { textColor = Color.white } };
             bodyStyle = new GUIStyle(GUI.skin.label) { fontSize = 12, wordWrap = true, normal = { textColor = new Color(0.82f, 0.87f, 0.94f) } };
         }
         GUILayout.BeginArea(HudRect, GUI.skin.box);
-        GUILayout.Label("Irregular World — Play", titleStyle);
-        GUILayout.Label("Click an adjacent cube face to move. Reach the pink goal marker to finish. Press Q/E to rotate the view; wheel to zoom.", bodyStyle);
+        GUILayout.Label("Click an adjacent cube face to move. Reach the pink goal marker to finish. Press R to restart; WASD move the view; Q/E rotate it; wheel to zoom.", bodyStyle);
         GUILayout.Label("Yellow outlines show the faces you can move to next.", bodyStyle);
-        GUILayout.Space(8);
-        GUILayout.Label($"Player: {(currentCube == null ? "not spawned" : $"{LocalToCell(currentCube.localPosition)} · face {currentFace}")}", bodyStyle);
-        GUILayout.Label($"Goal: {(goalCube == null ? "not set" : $"{LocalToCell(goalCube.localPosition)} · face {goalFace}")}", bodyStyle);
-        GUILayout.Label($"Active layer: {(ActiveLayer == null ? "none" : ActiveLayer.name)}", bodyStyle);
+        GUILayout.Label("Keys 1–9 select a layer · click the arrows beside it to rotate ±90°", bodyStyle);
         if (GUILayout.Button("Back to level editor")) SceneManager.LoadScene("IrregularLevelEditor");
-        if (layers.Count > 0)
-        {
-            string[] names = new string[layers.Count];
-            for (int i = 0; i < layers.Count; i++) names[i] = $"{i + 1}: {layers[i].name}";
-            int picked = GUILayout.SelectionGrid(activeLayerIndex, names, 2);
-            if (picked != activeLayerIndex) SelectLayer(picked);
-            GUILayout.Label("Keys 1–9 select a layer · click the arrows beside it to rotate ±90°", bodyStyle);
-        }
-        GUILayout.Space(8);
-        GUILayout.Label(status, bodyStyle);
         GUILayout.EndArea();
 
         if (ActiveLayer != null && !moving && !rotating && !levelCompleted)
