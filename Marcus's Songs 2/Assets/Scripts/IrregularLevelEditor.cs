@@ -9,13 +9,23 @@ using UnityEngine.SceneManagement;
 /// </summary>
 public class IrregularLevelEditor : MonoBehaviour
 {
-    public enum EditMode { Place, SetSpawnPoint, Erase }
+    public enum EditMode { Place, SetSpawnPoint, Erase, PaintBlockedFace }
     public enum Axis { X, Y, Z }
+
+    [System.Serializable]
+    class BlockedFaceData
+    {
+        public Vector3Int cell;
+        public Vector3Int normal;
+    }
 
     [System.Serializable]
     class SavedLevel
     {
         public List<Vector3Int> cells = new List<Vector3Int>();
+        public List<BlockedFaceData> blockedFaces = new List<BlockedFaceData>();
+        // Migration for levels saved when black meant a whole cube.
+        public List<Vector3Int> nonWalkableCells = new List<Vector3Int>();
         public List<SavedLayer> layers = new List<SavedLayer>();
         public List<Vector3Int> rotatingCells;
         public int axis;
@@ -48,6 +58,7 @@ public class IrregularLevelEditor : MonoBehaviour
     [SerializeField] float turnDuration = 0.45f;
     [Header("Colors")]
     [SerializeField] Color cubeColor = new Color(0.72f, 0.77f, 0.83f);
+    [SerializeField] Color blockedFaceColor = new Color(0.025f, 0.03f, 0.04f);
     [SerializeField] Color selectedColor = new Color(1f, 0.26f, 0.18f);
     [SerializeField] Color axisColor = new Color(0.12f, 0.64f, 1f);
     [SerializeField] Color spawnPointColor = new Color(1f, 0.8f, 0.12f);
@@ -57,13 +68,14 @@ public class IrregularLevelEditor : MonoBehaviour
     readonly List<RotationLayer> layers = new List<RotationLayer>();
     int activeLayerIndex = -1;
     Camera viewCamera;
-    Material cubeMaterial, selectedMaterial, axisMaterial, gridMaterial;
+    Material cubeMaterial, selectedMaterial, axisMaterial, gridMaterial, blockedFaceMaterial;
     Material spawnPointMaterial;
     LineRenderer axisLine;
     Transform spawnCube;
     Transform spawnMarker;
     Vector3Int spawnFaceNormal = Vector3Int.up;
     EditMode mode = EditMode.Place;
+    readonly List<BlockedFaceData> blockedFaces = new List<BlockedFaceData>();
     Vector3Int placementCoordinate = new Vector3Int(3, 0, 0);
     string placementX = "3", placementY = "0", placementZ = "0";
     bool rotating;
@@ -86,6 +98,7 @@ public class IrregularLevelEditor : MonoBehaviour
         }
 
         cubeMaterial = MakeMaterial(cubeColor);
+        blockedFaceMaterial = MakeMaterial(blockedFaceColor);
         selectedMaterial = MakeMaterial(selectedColor);
         axisMaterial = MakeMaterial(axisColor);
         gridMaterial = MakeMaterial(gridColor);
@@ -153,6 +166,7 @@ public class IrregularLevelEditor : MonoBehaviour
     {
         if (!cells.TryGetValue(cell, out Transform cube)) return;
         cells.Remove(cell);
+        blockedFaces.RemoveAll(face => face.cell == cell);
         if (spawnCube == cube) SetSpawnPoint(null);
         Destroy(cube.gameObject);
         if (viewCamera != null) UpdateCamera();
@@ -196,6 +210,11 @@ public class IrregularLevelEditor : MonoBehaviour
         if (faceNormal == Vector3Int.zero) faceNormal = Vector3Int.up;
         if (!cell.HasValue || !cells.TryGetValue(cell.Value, out spawnCube)) return;
         spawnFaceNormal = SnapToFace(faceNormal);
+        if (HasBlockedFace(cell.Value, spawnFaceNormal))
+        {
+            spawnCube = null;
+            return;
+        }
 
         var marker = GameObject.CreatePrimitive(PrimitiveType.Cube);
         marker.name = "Player Spawn Face Marker";
@@ -207,6 +226,50 @@ public class IrregularLevelEditor : MonoBehaviour
         Collider markerCollider = marker.GetComponent<Collider>();
         if (markerCollider != null) Destroy(markerCollider);
         spawnMarker = marker.transform;
+    }
+
+    bool HasBlockedFace(Vector3Int cell, Vector3Int normal)
+    {
+        foreach (BlockedFaceData face in blockedFaces)
+            if (face.cell == cell && face.normal == normal) return true;
+        return false;
+    }
+
+    void ToggleBlockedFace(Vector3Int cell, Vector3Int normal)
+    {
+        if (HasBlockedFace(cell, normal))
+        {
+            blockedFaces.RemoveAll(face => face.cell == cell && face.normal == normal);
+            if (cells.TryGetValue(cell, out Transform existingCube))
+            {
+                Transform patch = existingCube.Find($"Blocked Face {normal}");
+                if (patch != null) Destroy(patch.gameObject);
+            }
+            if (spawnCube != null && LocalToCell(spawnCube.localPosition) == cell && spawnFaceNormal == normal)
+                SetSpawnPoint(null);
+            status = $"Removed black face at {cell}, {normal}.";
+            return;
+        }
+
+        var face = new BlockedFaceData { cell = cell, normal = normal };
+        blockedFaces.Add(face);
+        if (cells.TryGetValue(cell, out Transform cube)) CreateBlockedFaceVisual(cube, normal);
+        if (spawnCube != null && LocalToCell(spawnCube.localPosition) == cell && spawnFaceNormal == normal)
+            SetSpawnPoint(null);
+        status = $"Painted a non-walkable black face at {cell}, {normal}. Other faces remain walkable.";
+    }
+
+    void CreateBlockedFaceVisual(Transform cube, Vector3Int normal)
+    {
+        var patch = GameObject.CreatePrimitive(PrimitiveType.Cube);
+        patch.name = $"Blocked Face {normal}";
+        patch.transform.SetParent(cube, false);
+        patch.transform.localPosition = (Vector3)normal * 0.508f;
+        patch.transform.localRotation = Quaternion.FromToRotation(Vector3.up, normal);
+        patch.transform.localScale = new Vector3(1f, 0.016f, 1f);
+        patch.GetComponent<Renderer>().sharedMaterial = blockedFaceMaterial;
+        Collider patchCollider = patch.GetComponent<Collider>();
+        if (patchCollider != null) patchCollider.enabled = false;
     }
 
     static Vector3Int SnapToFace(Vector3 value)
@@ -331,7 +394,11 @@ public class IrregularLevelEditor : MonoBehaviour
         List<Transform> layerCubes = GetLayerCubes(layer);
         var originalPositions = new Dictionary<Transform, Vector3Int>();
         foreach (Transform cube in layerCubes)
-            if (cube != null) originalPositions[cube] = LocalToCell(cube.localPosition);
+            if (cube != null)
+            {
+                Vector3Int cell = LocalToCell(cube.localPosition);
+                originalPositions[cube] = cell;
+            }
 
         var pivot = new GameObject("Temporary Layer Pivot").transform;
         pivot.SetParent(transform, false);
@@ -366,6 +433,13 @@ public class IrregularLevelEditor : MonoBehaviour
                 Mathf.Round(cube.localEulerAngles.z / 90f) * 90f);
             cells[newCell] = cube;
         }
+        foreach (BlockedFaceData face in blockedFaces)
+            foreach (KeyValuePair<Transform, Vector3Int> entry in originalPositions)
+                if (entry.Value == face.cell)
+                {
+                    face.cell = LocalToCell(entry.Key.localPosition);
+                    break;
+                }
 
         Destroy(pivot.gameObject);
         rotating = false;
@@ -421,11 +495,17 @@ public class IrregularLevelEditor : MonoBehaviour
         if (mode == EditMode.SetSpawnPoint)
         {
             Vector3Int faceNormal = SnapToFace(cube.InverseTransformDirection(hit.normal));
+            if (HasBlockedFace(cell, faceNormal)) { status = "That black face cannot be used as the player spawn."; return; }
             SetSpawnPoint(cell, faceNormal);
             status = $"Player spawn point set to {cell}, face {faceNormal}.";
         }
         else if (mode == EditMode.Erase)
             RemoveCell(cell);
+        else if (mode == EditMode.PaintBlockedFace)
+        {
+            Vector3Int faceNormal = SnapToFace(cube.InverseTransformDirection(hit.normal));
+            ToggleBlockedFace(cell, faceNormal);
+        }
         else
         {
             Vector3 localNormal = transform.InverseTransformDirection(hit.normal).normalized;
@@ -496,12 +576,16 @@ public class IrregularLevelEditor : MonoBehaviour
         GUILayout.Label($"Mode: {mode}");
         GUILayout.BeginHorizontal();
         if (GUILayout.Toggle(mode == EditMode.Place, "Place", GUI.skin.button)) mode = EditMode.Place;
+        if (GUILayout.Toggle(mode == EditMode.PaintBlockedFace, "Black face", GUI.skin.button)) mode = EditMode.PaintBlockedFace;
         if (GUILayout.Toggle(mode == EditMode.SetSpawnPoint, "Set spawn", GUI.skin.button)) mode = EditMode.SetSpawnPoint;
         if (GUILayout.Toggle(mode == EditMode.Erase, "Erase", GUI.skin.button)) mode = EditMode.Erase;
         GUILayout.EndHorizontal();
-        GUILayout.Label(mode == EditMode.SetSpawnPoint
-            ? "Click a cube face to set the player start. The gold tile marks that face."
-            : "Click a cube to use the selected mode.", hintStyle);
+        string modeHint = mode == EditMode.SetSpawnPoint
+            ? "Click a walkable cube face to set the player start."
+            : mode == EditMode.PaintBlockedFace
+                ? "Click one cube face to paint or erase a black, non-walkable face. Other faces stay usable."
+                : "Click a cube to use the selected mode.";
+        GUILayout.Label(modeHint, hintStyle);
         GUILayout.Label(spawnCube == null
             ? "Player spawn: not set"
             : $"Player spawn: {LocalToCell(spawnCube.localPosition)}, face {spawnFaceNormal}", hintStyle);
@@ -599,7 +683,7 @@ public class IrregularLevelEditor : MonoBehaviour
         if (GUILayout.Button("Reset example"))
         {
             foreach (Transform cube in new List<Transform>(cells.Values)) Destroy(cube.gameObject);
-            cells.Clear(); layers.Clear(); activeLayerIndex = -1;
+            cells.Clear(); blockedFaces.Clear(); layers.Clear(); activeLayerIndex = -1;
             CreateExample();
             status = "Restored the irregular example.";
         }
@@ -649,6 +733,13 @@ public class IrregularLevelEditor : MonoBehaviour
     {
         var data = new SavedLevel();
         foreach (Vector3Int cell in cells.Keys) data.cells.Add(cell);
+        foreach (BlockedFaceData face in blockedFaces)
+        {
+            Vector3 worldNormal = cells.TryGetValue(face.cell, out Transform cube)
+                ? transform.InverseTransformDirection(cube.TransformDirection(face.normal))
+                : face.normal;
+            data.blockedFaces.Add(new BlockedFaceData { cell = face.cell, normal = SnapToFace(worldNormal) });
+        }
         if (spawnCube != null)
         {
             data.hasSpawnPoint = true;
@@ -684,8 +775,15 @@ public class IrregularLevelEditor : MonoBehaviour
         foreach (Transform cube in new List<Transform>(cells.Values)) Destroy(cube.gameObject);
         SetSpawnPoint(null);
         cells.Clear();
+        blockedFaces.Clear();
         layers.Clear(); activeLayerIndex = -1;
         foreach (Vector3Int cell in data.cells) AddCell(cell);
+        if (data.nonWalkableCells != null)
+            foreach (Vector3Int cell in data.nonWalkableCells)
+                if (cells.ContainsKey(cell)) AddBlockedFaceFromSave(cell, Vector3Int.up);
+        if (data.blockedFaces != null)
+            foreach (BlockedFaceData face in data.blockedFaces)
+                if (face != null && cells.ContainsKey(face.cell)) AddBlockedFaceFromSave(face.cell, SnapToFace(face.normal));
         if (data.layers != null && data.layers.Count > 0)
             foreach (SavedLayer saved in data.layers)
             {
@@ -724,10 +822,17 @@ public class IrregularLevelEditor : MonoBehaviour
                 else ActiveLayer.axisPoint.z = slice;
             }
         }
-        if (data.hasSpawnPoint && cells.ContainsKey(data.spawnPoint)) SetSpawnPoint(data.spawnPoint, data.spawnFaceNormal);
+        if (data.hasSpawnPoint && cells.ContainsKey(data.spawnPoint) && !HasBlockedFace(data.spawnPoint, SnapToFace(data.spawnFaceNormal))) SetSpawnPoint(data.spawnPoint, data.spawnFaceNormal);
         RefreshCellColors();
         UpdateAxisLine();
         status = "Loaded the saved irregular level.";
+    }
+
+    void AddBlockedFaceFromSave(Vector3Int cell, Vector3Int normal)
+    {
+        if (HasBlockedFace(cell, normal)) return;
+        blockedFaces.Add(new BlockedFaceData { cell = cell, normal = normal });
+        if (cells.TryGetValue(cell, out Transform cube)) CreateBlockedFaceVisual(cube, normal);
     }
 
     struct GUIEnabledScope : System.IDisposable

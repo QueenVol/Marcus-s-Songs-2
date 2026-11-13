@@ -11,9 +11,18 @@ public class IrregularLevelRuntime : MonoBehaviour
     public enum Axis { X, Y, Z }
 
     [Serializable]
+    class BlockedFaceData
+    {
+        public Vector3Int cell;
+        public Vector3Int normal;
+    }
+
+    [Serializable]
     class LevelData
     {
         public List<Vector3Int> cells = new List<Vector3Int>();
+        public List<BlockedFaceData> blockedFaces = new List<BlockedFaceData>();
+        public List<Vector3Int> nonWalkableCells = new List<Vector3Int>();
         public List<LayerData> layers = new List<LayerData>();
         public List<Vector3Int> rotatingCells;
         public int axis;
@@ -44,6 +53,7 @@ public class IrregularLevelRuntime : MonoBehaviour
     [SerializeField, Min(0.1f)] float cellSize = 1f;
     [Header("Player")]
     [SerializeField] Color playerColor = new Color(0.15f, 0.9f, 1f);
+    [SerializeField] Color blockedFaceColor = new Color(0.025f, 0.03f, 0.04f);
     [SerializeField, Min(0.1f)] float playerHeight = 0.54f;
     [SerializeField, Min(0.01f)] float moveDuration = 0.24f;
     [Header("Reachable face outline")]
@@ -58,6 +68,7 @@ public class IrregularLevelRuntime : MonoBehaviour
     [SerializeField, Min(0.01f)] float viewTurnDuration = 0.28f;
 
     readonly Dictionary<Vector3Int, Transform> cells = new Dictionary<Vector3Int, Transform>();
+    readonly List<BlockedFaceData> blockedFaces = new List<BlockedFaceData>();
     readonly List<RuntimeLayer> layers = new List<RuntimeLayer>();
     readonly List<GameObject> reachableHighlights = new List<GameObject>();
     Camera viewCamera;
@@ -68,7 +79,7 @@ public class IrregularLevelRuntime : MonoBehaviour
     float viewQuarterTurns;
     float orbitYaw = 45f, orbitPitch = 30f, orbitDistance = 12f;
     Vector3 cameraCenter;
-    Material cubeMaterial, playerMaterial, axisMaterial, outlineMaterial;
+    Material cubeMaterial, playerMaterial, axisMaterial, outlineMaterial, blockedFaceMaterial;
     Mesh outlineMesh;
     LineRenderer axisLine;
     readonly List<LineRenderer> layerOutlineEdges = new List<LineRenderer>();
@@ -92,6 +103,7 @@ public class IrregularLevelRuntime : MonoBehaviour
         viewCamera.backgroundColor = backgroundColor;
         viewCamera.farClipPlane = 500f;
         cubeMaterial = MakeMaterial(new Color(0.72f, 0.77f, 0.83f));
+        blockedFaceMaterial = MakeMaterial(blockedFaceColor);
         playerMaterial = MakeMaterial(playerColor);
         axisMaterial = MakeMaterial(axisColor);
         outlineMaterial = MakeMaterial(outlineColor);
@@ -137,6 +149,12 @@ public class IrregularLevelRuntime : MonoBehaviour
         }
 
         foreach (Vector3Int cell in data.cells) AddCell(cell);
+        if (data.nonWalkableCells != null)
+            foreach (Vector3Int cell in data.nonWalkableCells)
+                if (cells.ContainsKey(cell)) AddBlockedFace(cell, Vector3Int.up);
+        if (data.blockedFaces != null)
+            foreach (BlockedFaceData face in data.blockedFaces)
+                if (face != null && cells.ContainsKey(face.cell)) AddBlockedFace(face.cell, SnapToFace(face.normal));
         if (data.layers != null && data.layers.Count > 0)
         {
             foreach (LayerData saved in data.layers)
@@ -175,11 +193,11 @@ public class IrregularLevelRuntime : MonoBehaviour
         if (data.hasSpawnPoint && cells.TryGetValue(data.spawnPoint, out currentCube))
         {
             currentFace = SnapToFace(data.spawnFaceNormal);
-            if (IsOpenFace(currentCube, currentFace)) CreatePlayer();
+            if (!HasBlockedFace(data.spawnPoint, currentFace) && IsOpenFace(currentCube, currentFace)) CreatePlayer();
             else
             {
                 currentCube = null;
-                status = "The saved spawn face is blocked by another cube. Choose an exposed face in the editor and save again.";
+                status = "The saved spawn face is blocked or covered. Choose a walkable exposed face in the editor and save again.";
             }
         }
         else status = "Level loaded, but no valid player spawn face is set. Set one in the editor and save again.";
@@ -199,6 +217,33 @@ public class IrregularLevelRuntime : MonoBehaviour
         cube.transform.localScale = Vector3.one * (cellSize * 0.94f);
         cube.GetComponent<Renderer>().sharedMaterial = cubeMaterial;
         cells.Add(cell, cube.transform);
+    }
+
+    void AddBlockedFace(Vector3Int cell, Vector3Int normal)
+    {
+        if (HasBlockedFace(cell, normal)) return;
+        blockedFaces.Add(new BlockedFaceData { cell = cell, normal = normal });
+        if (cells.TryGetValue(cell, out Transform cube)) CreateBlockedFaceVisual(cube, normal);
+    }
+
+    bool HasBlockedFace(Vector3Int cell, Vector3Int normal)
+    {
+        foreach (BlockedFaceData face in blockedFaces)
+            if (face.cell == cell && face.normal == normal) return true;
+        return false;
+    }
+
+    void CreateBlockedFaceVisual(Transform cube, Vector3Int normal)
+    {
+        var patch = GameObject.CreatePrimitive(PrimitiveType.Cube);
+        patch.name = $"Blocked Face {normal}";
+        patch.transform.SetParent(cube, false);
+        patch.transform.localPosition = (Vector3)normal * 0.508f;
+        patch.transform.localRotation = Quaternion.FromToRotation(Vector3.up, normal);
+        patch.transform.localScale = new Vector3(1f, 0.016f, 1f);
+        patch.GetComponent<Renderer>().sharedMaterial = blockedFaceMaterial;
+        Collider patchCollider = patch.GetComponent<Collider>();
+        if (patchCollider != null) patchCollider.enabled = false;
     }
 
     void CreatePlayer()
@@ -233,7 +278,7 @@ public class IrregularLevelRuntime : MonoBehaviour
         {
             foreach (Vector3Int face in faceNormals)
             {
-                if (!IsOpenFace(cube, face) || !IsAdjacent(cube, face)) continue;
+                if (HasBlockedFace(LocalToCell(cube.localPosition), face) || !IsOpenFace(cube, face) || !IsAdjacent(cube, face)) continue;
                 var outline = new GameObject("Reachable Face Outline");
                 outline.transform.SetParent(cube, false);
                 outline.transform.localPosition = (Vector3)face * (0.5f + outlineSurfaceOffset);
@@ -586,6 +631,11 @@ public class IrregularLevelRuntime : MonoBehaviour
             return;
         }
         Vector3Int targetFace = SnapToFace(targetCube.InverseTransformDirection(hit.normal));
+        if (HasBlockedFace(LocalToCell(targetCube.localPosition), targetFace))
+        {
+            status = "That black face cannot be stood on.";
+            return;
+        }
         if (!IsOpenFace(targetCube, targetFace))
         {
             status = "That face is blocked by another cube.";
@@ -742,7 +792,11 @@ public class IrregularLevelRuntime : MonoBehaviour
         List<Transform> layerCubes = GetLayerCubes(layer);
         var oldPositions = new Dictionary<Transform, Vector3Int>();
         foreach (Transform cube in layerCubes)
-            if (cube != null) oldPositions[cube] = LocalToCell(cube.localPosition);
+            if (cube != null)
+            {
+                Vector3Int cell = LocalToCell(cube.localPosition);
+                oldPositions[cube] = cell;
+            }
         var pivot = new GameObject("Layer Turn Pivot").transform;
         pivot.SetParent(worldRoot, false);
         pivot.localPosition = CellToLocal(layer.axisPoint);
@@ -771,6 +825,13 @@ public class IrregularLevelRuntime : MonoBehaviour
             cube.localRotation = Quaternion.Euler(Mathf.Round(angles.x / 90f) * 90f, Mathf.Round(angles.y / 90f) * 90f, Mathf.Round(angles.z / 90f) * 90f);
             cells[destination] = cube;
         }
+        foreach (BlockedFaceData face in blockedFaces)
+            foreach (KeyValuePair<Transform, Vector3Int> entry in oldPositions)
+                if (entry.Value == face.cell)
+                {
+                    face.cell = LocalToCell(entry.Key.localPosition);
+                    break;
+                }
         Destroy(pivot.gameObject);
         rotating = false;
         UpdateAxisLine();
