@@ -30,6 +30,9 @@ public class IrregularLevelRuntime : MonoBehaviour
         public bool hasSpawnPoint;
         public Vector3Int spawnPoint;
         public Vector3Int spawnFaceNormal = Vector3Int.up;
+        public bool hasGoalPoint;
+        public Vector3Int goalPoint;
+        public Vector3Int goalFaceNormal = Vector3Int.up;
     }
 
     [Serializable]
@@ -54,6 +57,7 @@ public class IrregularLevelRuntime : MonoBehaviour
     [Header("Player")]
     [SerializeField] Color playerColor = new Color(0.15f, 0.9f, 1f);
     [SerializeField] Color blockedFaceColor = new Color(0.025f, 0.03f, 0.04f);
+    [SerializeField] Color goalPointColor = new Color(0.95f, 0.3f, 0.85f);
     [SerializeField, Min(0.1f)] float playerHeight = 0.54f;
     [SerializeField, Min(0.01f)] float moveDuration = 0.24f;
     [Header("Reachable face outline")]
@@ -72,14 +76,15 @@ public class IrregularLevelRuntime : MonoBehaviour
     readonly List<RuntimeLayer> layers = new List<RuntimeLayer>();
     readonly List<GameObject> reachableHighlights = new List<GameObject>();
     Camera viewCamera;
-    Transform worldRoot, playerToken, currentCube;
+    Transform worldRoot, playerToken, currentCube, goalCube, goalMarker;
     Vector3Int currentFace = Vector3Int.up;
+    Vector3Int goalFace = Vector3Int.up;
     int activeLayerIndex;
-    bool moving, rotating, rotatingView;
+    bool moving, rotating, rotatingView, levelCompleted;
     float viewQuarterTurns;
     float orbitYaw = 45f, orbitPitch = 30f, orbitDistance = 12f;
     Vector3 cameraCenter;
-    Material cubeMaterial, playerMaterial, axisMaterial, outlineMaterial, blockedFaceMaterial;
+    Material cubeMaterial, playerMaterial, axisMaterial, outlineMaterial, blockedFaceMaterial, goalPointMaterial;
     Mesh outlineMesh;
     LineRenderer axisLine;
     readonly List<LineRenderer> layerOutlineEdges = new List<LineRenderer>();
@@ -88,7 +93,7 @@ public class IrregularLevelRuntime : MonoBehaviour
     string status = "Click an adjacent face to move. Use the arrows beside the active layer to turn it.";
 
     RuntimeLayer ActiveLayer => activeLayerIndex >= 0 && activeLayerIndex < layers.Count ? layers[activeLayerIndex] : null;
-    static Rect HudRect => new Rect(18f, 18f, 315f, 280f);
+    static Rect HudRect => new Rect(18f, 18f, 315f, 310f);
 
     void Start()
     {
@@ -104,6 +109,7 @@ public class IrregularLevelRuntime : MonoBehaviour
         viewCamera.farClipPlane = 500f;
         cubeMaterial = MakeMaterial(new Color(0.72f, 0.77f, 0.83f));
         blockedFaceMaterial = MakeMaterial(blockedFaceColor);
+        goalPointMaterial = MakeMaterial(goalPointColor);
         playerMaterial = MakeMaterial(playerColor);
         axisMaterial = MakeMaterial(axisColor);
         outlineMaterial = MakeMaterial(outlineColor);
@@ -155,6 +161,16 @@ public class IrregularLevelRuntime : MonoBehaviour
         if (data.blockedFaces != null)
             foreach (BlockedFaceData face in data.blockedFaces)
                 if (face != null && cells.ContainsKey(face.cell)) AddBlockedFace(face.cell, SnapToFace(face.normal));
+        if (data.hasGoalPoint && cells.TryGetValue(data.goalPoint, out goalCube))
+        {
+            goalFace = SnapToFace(data.goalFaceNormal);
+            if (HasBlockedFace(data.goalPoint, goalFace) || !IsOpenFace(goalCube, goalFace))
+            {
+                goalCube = null;
+                status = "The saved goal face is blocked or covered. Choose a walkable exposed face in the editor and save again.";
+            }
+            else CreateGoalMarker();
+        }
         if (data.layers != null && data.layers.Count > 0)
         {
             foreach (LayerData saved in data.layers)
@@ -246,6 +262,20 @@ public class IrregularLevelRuntime : MonoBehaviour
         if (patchCollider != null) patchCollider.enabled = false;
     }
 
+    void CreateGoalMarker()
+    {
+        var marker = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+        marker.name = "Player Goal Face Marker";
+        goalMarker = marker.transform;
+        goalMarker.SetParent(goalCube, false);
+        goalMarker.localPosition = (Vector3)goalFace * 0.515f;
+        goalMarker.localRotation = Quaternion.FromToRotation(Vector3.up, goalFace);
+        goalMarker.localScale = new Vector3(0.5f, 0.025f, 0.5f);
+        marker.GetComponent<Renderer>().sharedMaterial = goalPointMaterial;
+        Collider markerCollider = marker.GetComponent<Collider>();
+        if (markerCollider != null) markerCollider.enabled = false;
+    }
+
     void CreatePlayer()
     {
         var tokenObject = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
@@ -260,6 +290,7 @@ public class IrregularLevelRuntime : MonoBehaviour
         if (collider != null) Destroy(collider);
         status = "Click an adjacent face to move. Use the arrows beside the active layer to turn it.";
         RefreshReachableHighlights();
+        CheckGoalReached();
     }
 
     void RefreshReachableHighlights()
@@ -267,7 +298,7 @@ public class IrregularLevelRuntime : MonoBehaviour
         foreach (GameObject highlight in reachableHighlights)
             if (highlight != null) Destroy(highlight);
         reachableHighlights.Clear();
-        if (currentCube == null || moving) return;
+        if (currentCube == null || moving || levelCompleted) return;
 
         Vector3Int[] faceNormals =
         {
@@ -573,7 +604,7 @@ public class IrregularLevelRuntime : MonoBehaviour
         for (int i = 0; i < Mathf.Min(9, layers.Count); i++)
             if (Input.GetKeyDown((KeyCode)((int)KeyCode.Alpha1 + i))) SelectLayer(i);
 
-        if (!moving && !rotating && Input.GetMouseButtonDown(0) && !PointerOverHud(Input.mousePosition) && !PointerOverRotationButtons(Input.mousePosition)) TryMovePlayer(Input.mousePosition);
+        if (!moving && !rotating && !levelCompleted && Input.GetMouseButtonDown(0) && !PointerOverHud(Input.mousePosition) && !PointerOverRotationButtons(Input.mousePosition)) TryMovePlayer(Input.mousePosition);
     }
 
     bool PointerOverHud(Vector3 screenPoint)
@@ -715,9 +746,18 @@ public class IrregularLevelRuntime : MonoBehaviour
         currentCube = targetCube;
         currentFace = targetFace;
         moving = false;
+        CheckGoalReached();
         RefreshReachableHighlights();
         UpdateLayerOutline();
-        status = $"Moved to {LocalToCell(currentCube.localPosition)}, face {currentFace}.";
+        if (!levelCompleted) status = $"Moved to {LocalToCell(currentCube.localPosition)}, face {currentFace}.";
+    }
+
+    void CheckGoalReached()
+    {
+        if (goalCube == null || currentCube != goalCube || currentFace != goalFace) return;
+        levelCompleted = true;
+        status = "Goal reached! Level complete.";
+        RefreshReachableHighlights();
     }
 
     static Vector3Int SnapToFace(Vector3 value)
@@ -740,7 +780,7 @@ public class IrregularLevelRuntime : MonoBehaviour
 
     void RotateActiveLayer(int quarterTurns)
     {
-        if (moving || rotating || ActiveLayer == null) return;
+        if (moving || rotating || levelCompleted || ActiveLayer == null) return;
         if (!CanRotate(quarterTurns, out string reason)) { status = reason; return; }
         StartCoroutine(AnimateRotation(quarterTurns));
     }
@@ -922,10 +962,11 @@ public class IrregularLevelRuntime : MonoBehaviour
         }
         GUILayout.BeginArea(HudRect, GUI.skin.box);
         GUILayout.Label("Irregular World — Play", titleStyle);
-        GUILayout.Label("Click an adjacent cube face to move. Press Q/E to rotate the view by 90°; wheel to zoom.", bodyStyle);
+        GUILayout.Label("Click an adjacent cube face to move. Reach the pink goal marker to finish. Press Q/E to rotate the view; wheel to zoom.", bodyStyle);
         GUILayout.Label("Yellow outlines show the faces you can move to next.", bodyStyle);
         GUILayout.Space(8);
         GUILayout.Label($"Player: {(currentCube == null ? "not spawned" : $"{LocalToCell(currentCube.localPosition)} · face {currentFace}")}", bodyStyle);
+        GUILayout.Label($"Goal: {(goalCube == null ? "not set" : $"{LocalToCell(goalCube.localPosition)} · face {goalFace}")}", bodyStyle);
         GUILayout.Label($"Active layer: {(ActiveLayer == null ? "none" : ActiveLayer.name)}", bodyStyle);
         if (GUILayout.Button("Back to level editor")) SceneManager.LoadScene("IrregularLevelEditor");
         if (layers.Count > 0)
@@ -940,7 +981,7 @@ public class IrregularLevelRuntime : MonoBehaviour
         GUILayout.Label(status, bodyStyle);
         GUILayout.EndArea();
 
-        if (ActiveLayer != null && !moving && !rotating)
+        if (ActiveLayer != null && !moving && !rotating && !levelCompleted)
         {
             EnsureRotationButtonStyle();
             int clockwiseTurns = GetClockwiseTurnSign(ActiveLayer);

@@ -9,7 +9,7 @@ using UnityEngine.SceneManagement;
 /// </summary>
 public class IrregularLevelEditor : MonoBehaviour
 {
-    public enum EditMode { Place, SetSpawnPoint, Erase, PaintBlockedFace }
+    public enum EditMode { Place, SetSpawnPoint, SetGoalPoint, Erase, PaintBlockedFace }
     public enum Axis { X, Y, Z }
 
     [System.Serializable]
@@ -33,6 +33,9 @@ public class IrregularLevelEditor : MonoBehaviour
         public bool hasSpawnPoint;
         public Vector3Int spawnPoint;
         public Vector3Int spawnFaceNormal = Vector3Int.up;
+        public bool hasGoalPoint;
+        public Vector3Int goalPoint;
+        public Vector3Int goalFaceNormal = Vector3Int.up;
     }
 
     [System.Serializable]
@@ -62,6 +65,7 @@ public class IrregularLevelEditor : MonoBehaviour
     [SerializeField] Color selectedColor = new Color(1f, 0.26f, 0.18f);
     [SerializeField] Color axisColor = new Color(0.12f, 0.64f, 1f);
     [SerializeField] Color spawnPointColor = new Color(1f, 0.8f, 0.12f);
+    [SerializeField] Color goalPointColor = new Color(0.95f, 0.3f, 0.85f);
     [SerializeField] Color gridColor = new Color(0.4f, 0.52f, 0.65f, 0.25f);
 
     readonly Dictionary<Vector3Int, Transform> cells = new Dictionary<Vector3Int, Transform>();
@@ -69,11 +73,14 @@ public class IrregularLevelEditor : MonoBehaviour
     int activeLayerIndex = -1;
     Camera viewCamera;
     Material cubeMaterial, selectedMaterial, axisMaterial, gridMaterial, blockedFaceMaterial;
-    Material spawnPointMaterial;
+    Material spawnPointMaterial, goalPointMaterial;
     LineRenderer axisLine;
     Transform spawnCube;
     Transform spawnMarker;
     Vector3Int spawnFaceNormal = Vector3Int.up;
+    Transform goalCube;
+    Transform goalMarker;
+    Vector3Int goalFaceNormal = Vector3Int.up;
     EditMode mode = EditMode.Place;
     readonly List<BlockedFaceData> blockedFaces = new List<BlockedFaceData>();
     Vector3Int placementCoordinate = new Vector3Int(3, 0, 0);
@@ -103,6 +110,7 @@ public class IrregularLevelEditor : MonoBehaviour
         axisMaterial = MakeMaterial(axisColor);
         gridMaterial = MakeMaterial(gridColor);
         spawnPointMaterial = MakeMaterial(spawnPointColor);
+        goalPointMaterial = MakeMaterial(goalPointColor);
         CreateAxisLine();
         if (loadExampleOnStart)
         {
@@ -146,6 +154,7 @@ public class IrregularLevelEditor : MonoBehaviour
         foreach (Vector3Int cell in example) AddCell(cell);
         AddLayer("Layer 1");
         SetSpawnPoint(new Vector3Int(0, 2, 0), Vector3Int.up);
+        SetGoalPoint(new Vector3Int(2, 1, 0), Vector3Int.up);
     }
 
     void AddCell(Vector3Int cell)
@@ -168,6 +177,7 @@ public class IrregularLevelEditor : MonoBehaviour
         cells.Remove(cell);
         blockedFaces.RemoveAll(face => face.cell == cell);
         if (spawnCube == cube) SetSpawnPoint(null);
+        if (goalCube == cube) SetGoalPoint(null);
         Destroy(cube.gameObject);
         if (viewCamera != null) UpdateCamera();
     }
@@ -210,7 +220,7 @@ public class IrregularLevelEditor : MonoBehaviour
         if (faceNormal == Vector3Int.zero) faceNormal = Vector3Int.up;
         if (!cell.HasValue || !cells.TryGetValue(cell.Value, out spawnCube)) return;
         spawnFaceNormal = SnapToFace(faceNormal);
-        if (HasBlockedFace(cell.Value, spawnFaceNormal))
+        if (HasBlockedFace(cell.Value, spawnFaceNormal) || !IsOpenFace(spawnCube, spawnFaceNormal))
         {
             spawnCube = null;
             return;
@@ -226,6 +236,39 @@ public class IrregularLevelEditor : MonoBehaviour
         Collider markerCollider = marker.GetComponent<Collider>();
         if (markerCollider != null) Destroy(markerCollider);
         spawnMarker = marker.transform;
+    }
+
+    void SetGoalPoint(Vector3Int? cell, Vector3Int faceNormal = default)
+    {
+        if (goalMarker != null) Destroy(goalMarker.gameObject);
+        goalMarker = null;
+        goalCube = null;
+        if (faceNormal == Vector3Int.zero) faceNormal = Vector3Int.up;
+        if (!cell.HasValue || !cells.TryGetValue(cell.Value, out goalCube)) return;
+        goalFaceNormal = SnapToFace(faceNormal);
+        if (HasBlockedFace(cell.Value, goalFaceNormal) || !IsOpenFace(goalCube, goalFaceNormal))
+        {
+            goalCube = null;
+            return;
+        }
+
+        var marker = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+        marker.name = "Player Goal Face Marker";
+        marker.transform.SetParent(goalCube, false);
+        marker.transform.localPosition = (Vector3)goalFaceNormal * 0.515f;
+        marker.transform.localRotation = Quaternion.FromToRotation(Vector3.up, goalFaceNormal);
+        marker.transform.localScale = new Vector3(0.5f, 0.025f, 0.5f);
+        marker.GetComponent<Renderer>().sharedMaterial = goalPointMaterial;
+        Collider markerCollider = marker.GetComponent<Collider>();
+        if (markerCollider != null) markerCollider.enabled = false;
+        goalMarker = marker.transform;
+    }
+
+    bool IsOpenFace(Transform cube, Vector3Int normal)
+    {
+        Vector3Int cell = LocalToCell(cube.localPosition);
+        Vector3Int outward = SnapToFace(transform.InverseTransformDirection(cube.TransformDirection(normal)));
+        return !cells.ContainsKey(cell + outward);
     }
 
     bool HasBlockedFace(Vector3Int cell, Vector3Int normal)
@@ -256,6 +299,8 @@ public class IrregularLevelEditor : MonoBehaviour
         if (cells.TryGetValue(cell, out Transform cube)) CreateBlockedFaceVisual(cube, normal);
         if (spawnCube != null && LocalToCell(spawnCube.localPosition) == cell && spawnFaceNormal == normal)
             SetSpawnPoint(null);
+        if (goalCube != null && LocalToCell(goalCube.localPosition) == cell && goalFaceNormal == normal)
+            SetGoalPoint(null);
         status = $"Painted a non-walkable black face at {cell}, {normal}. Other faces remain walkable.";
     }
 
@@ -495,9 +540,16 @@ public class IrregularLevelEditor : MonoBehaviour
         if (mode == EditMode.SetSpawnPoint)
         {
             Vector3Int faceNormal = SnapToFace(cube.InverseTransformDirection(hit.normal));
-            if (HasBlockedFace(cell, faceNormal)) { status = "That black face cannot be used as the player spawn."; return; }
+            if (HasBlockedFace(cell, faceNormal) || !IsOpenFace(cube, faceNormal)) { status = "Choose an exposed, walkable face for the player spawn."; return; }
             SetSpawnPoint(cell, faceNormal);
             status = $"Player spawn point set to {cell}, face {faceNormal}.";
+        }
+        else if (mode == EditMode.SetGoalPoint)
+        {
+            Vector3Int faceNormal = SnapToFace(cube.InverseTransformDirection(hit.normal));
+            if (HasBlockedFace(cell, faceNormal) || !IsOpenFace(cube, faceNormal)) { status = "Choose an exposed, walkable face for the goal."; return; }
+            SetGoalPoint(cell, faceNormal);
+            status = $"Player goal set to {cell}, face {faceNormal}.";
         }
         else if (mode == EditMode.Erase)
             RemoveCell(cell);
@@ -578,10 +630,15 @@ public class IrregularLevelEditor : MonoBehaviour
         if (GUILayout.Toggle(mode == EditMode.Place, "Place", GUI.skin.button)) mode = EditMode.Place;
         if (GUILayout.Toggle(mode == EditMode.PaintBlockedFace, "Black face", GUI.skin.button)) mode = EditMode.PaintBlockedFace;
         if (GUILayout.Toggle(mode == EditMode.SetSpawnPoint, "Set spawn", GUI.skin.button)) mode = EditMode.SetSpawnPoint;
+        GUILayout.EndHorizontal();
+        GUILayout.BeginHorizontal();
+        if (GUILayout.Toggle(mode == EditMode.SetGoalPoint, "Set goal", GUI.skin.button)) mode = EditMode.SetGoalPoint;
         if (GUILayout.Toggle(mode == EditMode.Erase, "Erase", GUI.skin.button)) mode = EditMode.Erase;
         GUILayout.EndHorizontal();
         string modeHint = mode == EditMode.SetSpawnPoint
             ? "Click a walkable cube face to set the player start."
+            : mode == EditMode.SetGoalPoint
+                ? "Click a walkable cube face to set the level goal. The goal moves with its cube when a layer turns."
             : mode == EditMode.PaintBlockedFace
                 ? "Click one cube face to paint or erase a black, non-walkable face. Other faces stay usable."
                 : "Click a cube to use the selected mode.";
@@ -589,6 +646,9 @@ public class IrregularLevelEditor : MonoBehaviour
         GUILayout.Label(spawnCube == null
             ? "Player spawn: not set"
             : $"Player spawn: {LocalToCell(spawnCube.localPosition)}, face {spawnFaceNormal}", hintStyle);
+        GUILayout.Label(goalCube == null
+            ? "Player goal: not set"
+            : $"Player goal: {LocalToCell(goalCube.localPosition)}, face {goalFaceNormal}", hintStyle);
         GUILayout.Space(8);
 
         GUILayout.Label("Rotation layers");
@@ -683,6 +743,8 @@ public class IrregularLevelEditor : MonoBehaviour
         if (GUILayout.Button("Reset example"))
         {
             foreach (Transform cube in new List<Transform>(cells.Values)) Destroy(cube.gameObject);
+            SetSpawnPoint(null);
+            SetGoalPoint(null);
             cells.Clear(); blockedFaces.Clear(); layers.Clear(); activeLayerIndex = -1;
             CreateExample();
             status = "Restored the irregular example.";
@@ -747,6 +809,13 @@ public class IrregularLevelEditor : MonoBehaviour
             Vector3 faceInLevelSpace = transform.InverseTransformDirection(spawnCube.TransformDirection(spawnFaceNormal));
             data.spawnFaceNormal = SnapToFace(faceInLevelSpace);
         }
+        if (goalCube != null)
+        {
+            data.hasGoalPoint = true;
+            data.goalPoint = LocalToCell(goalCube.localPosition);
+            Vector3 faceInLevelSpace = transform.InverseTransformDirection(goalCube.TransformDirection(goalFaceNormal));
+            data.goalFaceNormal = SnapToFace(faceInLevelSpace);
+        }
         foreach (RotationLayer layer in layers)
         {
             var saved = new SavedLayer { name = layer.name, axis = (int)layer.axis, axisPoint = layer.axisPoint };
@@ -774,6 +843,7 @@ public class IrregularLevelEditor : MonoBehaviour
         }
         foreach (Transform cube in new List<Transform>(cells.Values)) Destroy(cube.gameObject);
         SetSpawnPoint(null);
+        SetGoalPoint(null);
         cells.Clear();
         blockedFaces.Clear();
         layers.Clear(); activeLayerIndex = -1;
@@ -823,6 +893,7 @@ public class IrregularLevelEditor : MonoBehaviour
             }
         }
         if (data.hasSpawnPoint && cells.ContainsKey(data.spawnPoint) && !HasBlockedFace(data.spawnPoint, SnapToFace(data.spawnFaceNormal))) SetSpawnPoint(data.spawnPoint, data.spawnFaceNormal);
+        if (data.hasGoalPoint && cells.ContainsKey(data.goalPoint) && !HasBlockedFace(data.goalPoint, SnapToFace(data.goalFaceNormal))) SetGoalPoint(data.goalPoint, data.goalFaceNormal);
         RefreshCellColors();
         UpdateAxisLine();
         status = "Loaded the saved irregular level.";
