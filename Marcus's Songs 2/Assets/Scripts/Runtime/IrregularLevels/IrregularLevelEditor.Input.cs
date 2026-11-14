@@ -102,6 +102,25 @@ public partial class IrregularLevelEditor
 
     void OnDrawGizmos()
     {
+        Matrix4x4 oldMatrix = Gizmos.matrix;
+        Color oldColor = Gizmos.color;
+        Gizmos.matrix = transform.localToWorldMatrix;
+
+        if (!Application.isPlaying)
+        {
+            Gizmos.color = cubeColor;
+            foreach (Vector3Int cell in ScenePreviewCells)
+                Gizmos.DrawCube(CellToLocal(cell), Vector3.one * (cellSize * 0.94f));
+
+            Gizmos.color = spawnPointColor;
+            Gizmos.DrawSphere(CellToLocal(new Vector3Int(0, 2, 0)) + Vector3.up * (cellSize * 0.55f), cellSize * 0.14f);
+            Gizmos.color = goalPointColor;
+            Gizmos.DrawSphere(CellToLocal(new Vector3Int(2, 1, 0)) + Vector3.up * (cellSize * 0.55f), cellSize * 0.14f);
+            Gizmos.matrix = oldMatrix;
+            Gizmos.color = oldColor;
+            return;
+        }
+
         Gizmos.color = gridColor;
         var preview = new HashSet<Vector3Int>();
         if (Application.isPlaying && cells.Count > 0)
@@ -124,6 +143,8 @@ public partial class IrregularLevelEditor
             if (Application.isPlaying && cells.ContainsKey(cell)) continue;
             Gizmos.DrawWireCube(CellToLocal(cell), Vector3.one * cellSize * 0.9f);
         }
+        Gizmos.matrix = oldMatrix;
+        Gizmos.color = oldColor;
     }
 
 }

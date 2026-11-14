@@ -96,6 +96,25 @@ public partial class IrregularLevelRuntime : MonoBehaviour
     RuntimeLayer ActiveLayer => activeLayerIndex >= 0 && activeLayerIndex < layers.Count ? layers[activeLayerIndex] : null;
     static Rect HudRect => new Rect(18f, 18f, 315f, 210f);
 
+    void OnDrawGizmos()
+    {
+        if (Application.isPlaying) return;
+
+        Matrix4x4 oldMatrix = Gizmos.matrix;
+        Color oldColor = Gizmos.color;
+        Gizmos.matrix = transform.localToWorldMatrix;
+        Gizmos.color = new Color(0.72f, 0.77f, 0.83f);
+        foreach (Vector3Int cell in IrregularLevelEditor.ScenePreviewCells)
+            Gizmos.DrawCube((Vector3)cell * cellSize, Vector3.one * (cellSize * 0.94f));
+
+        Gizmos.color = playerColor;
+        Gizmos.DrawSphere(new Vector3(0f, 2.55f, 0f) * cellSize, cellSize * 0.14f);
+        Gizmos.color = goalPointColor;
+        Gizmos.DrawSphere(new Vector3(2f, 1.55f, 0f) * cellSize, cellSize * 0.14f);
+        Gizmos.matrix = oldMatrix;
+        Gizmos.color = oldColor;
+    }
+
     void Start()
     {
         viewCamera = Camera.main;

@@ -9,6 +9,14 @@ using UnityEngine.SceneManagement;
 /// </summary>
 public partial class IrregularLevelEditor : MonoBehaviour
 {
+    internal static readonly Vector3Int[] ScenePreviewCells =
+    {
+        new(-1,0,0), new(-1,1,0), new(-1,2,0), new(-1,0,1), new(-1,1,1),
+        new(0,0,-1), new(0,1,-1), new(0,2,-1), new(0,0,0), new(0,1,0), new(0,2,0), new(0,0,1), new(0,1,1),
+        new(1,0,0), new(1,1,0), new(1,2,0), new(1,1,1),
+        new(2,0,0), new(2,1,0)
+    };
+
     public enum EditMode { Place, SetSpawnPoint, SetGoalPoint, Erase, PaintBlockedFace }
     public enum Axis { X, Y, Z }
 
@@ -129,3 +137,4 @@ public partial class IrregularLevelEditor : MonoBehaviour
         public void Dispose() { GUI.enabled = old; }
     }
 }
+
