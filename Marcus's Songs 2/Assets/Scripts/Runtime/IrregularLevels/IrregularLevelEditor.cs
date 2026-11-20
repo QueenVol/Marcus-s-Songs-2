@@ -9,14 +9,6 @@ using UnityEngine.SceneManagement;
 /// </summary>
 public partial class IrregularLevelEditor : MonoBehaviour
 {
-    internal static readonly Vector3Int[] ScenePreviewCells =
-    {
-        new(-1,0,0), new(-1,1,0), new(-1,2,0), new(-1,0,1), new(-1,1,1),
-        new(0,0,-1), new(0,1,-1), new(0,2,-1), new(0,0,0), new(0,1,0), new(0,2,0), new(0,0,1), new(0,1,1),
-        new(1,0,0), new(1,1,0), new(1,2,0), new(1,1,1),
-        new(2,0,0), new(2,1,0)
-    };
-
     public enum EditMode { Place, SetSpawnPoint, SetGoalPoint, Erase, PaintBlockedFace }
     public enum Axis { X, Y, Z }
 
@@ -44,6 +36,7 @@ public partial class IrregularLevelEditor : MonoBehaviour
         public bool hasGoalPoint;
         public Vector3Int goalPoint;
         public Vector3Int goalFaceNormal = Vector3Int.up;
+        public int activeLayerIndex = -1;
     }
 
     [System.Serializable]
@@ -95,12 +88,84 @@ public partial class IrregularLevelEditor : MonoBehaviour
     string placementX = "3", placementY = "0", placementZ = "0";
     bool rotating;
     float orbitYaw = -34f, orbitPitch = 24f, orbitDistance = 12f;
+    Vector3 cameraPanOffset;
     Vector2 lastMouse;
+    bool panningCamera;
     Vector2 panelScroll;
     GUIStyle titleStyle, hintStyle;
     string status = "Choose a grid slice to define a rotating layer.";
+    readonly List<string> undoHistory = new List<string>();
+    readonly List<string> redoHistory = new List<string>();
+    readonly List<int> saveSlots = new List<int>();
+    int selectedSaveSlotIndex = -1;
+    int pendingDeleteSlot = -1;
+    string slotNameInput = "New Level";
+    string lastHistoryState;
+    bool applyingHistory;
+    static Mesh scenePreviewMesh;
+    static string scenePreviewMeshKey;
+    static readonly List<Vector3> scenePreviewLines = new List<Vector3>();
 
     RotationLayer ActiveLayer => activeLayerIndex >= 0 && activeLayerIndex < layers.Count ? layers[activeLayerIndex] : null;
+
+    internal static void DrawScenePreview(IList<Vector3Int> cells, float size, Color color)
+    {
+        if (cells == null || cells.Count == 0) return;
+        var ordered = new List<Vector3Int>(cells);
+        ordered.Sort((a, b) => a.x != b.x ? a.x.CompareTo(b.x) : a.y != b.y ? a.y.CompareTo(b.y) : a.z.CompareTo(b.z));
+        string key = size.ToString("R") + ":" + string.Join(";", ordered.ConvertAll(cell => $"{cell.x},{cell.y},{cell.z}"));
+        if (scenePreviewMesh == null) scenePreviewMesh = new Mesh { name = "Irregular Level Scene Preview" };
+        if (key != scenePreviewMeshKey)
+        {
+            var occupied = new HashSet<Vector3Int>(ordered);
+            var vertices = new List<Vector3>();
+            var triangles = new List<int>();
+            var lineSegments = new List<Vector3>();
+            // Use full cell faces for the preview shell so adjacent boundary faces meet
+            // without transparent gaps when Unity draws the combined gizmo mesh.
+            float half = size * 0.5f;
+            Vector3Int[] normals = { Vector3Int.right, Vector3Int.left, Vector3Int.up, Vector3Int.down, new Vector3Int(0, 0, 1), new Vector3Int(0, 0, -1) };
+            Vector3Int[] uAxes = { Vector3Int.up, new Vector3Int(0, 0, 1), new Vector3Int(0, 0, 1), Vector3Int.right, Vector3Int.right, Vector3Int.up };
+            Vector3Int[] vAxes = { new Vector3Int(0, 0, 1), Vector3Int.up, Vector3Int.right, new Vector3Int(0, 0, 1), Vector3Int.up, Vector3Int.right };
+            foreach (Vector3Int cell in ordered)
+                for (int face = 0; face < normals.Length; face++)
+                {
+                    if (occupied.Contains(cell + normals[face])) continue;
+                    Vector3 center = (Vector3)cell * size;
+                    Vector3 normal = normals[face];
+                    Vector3 u = uAxes[face];
+                    Vector3 v = vAxes[face];
+                    Vector3 faceCenter = center + normal * half;
+                    Vector3 a = faceCenter - u * half - v * half;
+                    Vector3 b = faceCenter + u * half - v * half;
+                    Vector3 c = faceCenter + u * half + v * half;
+                    Vector3 d = faceCenter - u * half + v * half;
+                    int first = vertices.Count;
+                    vertices.Add(a); vertices.Add(b); vertices.Add(c); vertices.Add(d);
+                    triangles.Add(first); triangles.Add(first + 1); triangles.Add(first + 2);
+                    triangles.Add(first); triangles.Add(first + 2); triangles.Add(first + 3);
+                    lineSegments.Add(a); lineSegments.Add(b); lineSegments.Add(b); lineSegments.Add(c);
+                    lineSegments.Add(c); lineSegments.Add(d); lineSegments.Add(d); lineSegments.Add(a);
+                }
+
+            scenePreviewMesh.Clear();
+            if (vertices.Count > 65535) scenePreviewMesh.indexFormat = UnityEngine.Rendering.IndexFormat.UInt32;
+            scenePreviewMesh.SetVertices(vertices);
+            scenePreviewMesh.SetTriangles(triangles, 0);
+            scenePreviewMesh.RecalculateNormals();
+            scenePreviewMesh.RecalculateBounds();
+            scenePreviewMeshKey = key;
+            scenePreviewMesh.hideFlags = HideFlags.HideAndDontSave;
+            scenePreviewLines.Clear();
+            scenePreviewLines.AddRange(lineSegments);
+        }
+
+        Gizmos.color = color;
+        Gizmos.DrawMesh(scenePreviewMesh);
+        Gizmos.color = Color.Lerp(color, Color.black, 0.16f);
+        for (int i = 0; i < scenePreviewLines.Count; i += 2)
+            Gizmos.DrawLine(scenePreviewLines[i], scenePreviewLines[i + 1]);
+    }
 
     void Start()
     {
@@ -120,14 +185,16 @@ public partial class IrregularLevelEditor : MonoBehaviour
         spawnPointMaterial = MakeMaterial(spawnPointColor);
         goalPointMaterial = MakeMaterial(goalPointColor);
         CreateAxisLine();
+        RefreshSaveSlots();
         if (loadExampleOnStart)
         {
-            string savePath = Path.Combine(Application.persistentDataPath, "MarcusSongs_IrregularLevel.json");
-            if (File.Exists(savePath)) LoadLevel();
+            if (saveSlots.Count > 0) LoadSlot(saveSlots[saveSlots.Count - 1]);
+            else if (File.Exists(Path.Combine(Application.persistentDataPath, "MarcusSongs_IrregularLevel.json"))) LoadLevel();
             else CreateExample();
         }
         UpdateCamera();
         UpdateAxisLine();
+        lastHistoryState = CaptureEditorState();
     }
 
     struct GUIEnabledScope : System.IDisposable

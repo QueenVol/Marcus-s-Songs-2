@@ -8,6 +8,20 @@ using UnityEngine.EventSystems;
 
 public partial class IrregularLevelEditor
 {
+    void ClearLevel()
+    {
+        foreach (Transform cube in new List<Transform>(cells.Values))
+            if (cube != null) Destroy(cube.gameObject);
+        SetSpawnPoint(null);
+        SetGoalPoint(null);
+        cells.Clear();
+        blockedFaces.Clear();
+        layers.Clear();
+        activeLayerIndex = -1;
+        UpdateAxisLine();
+        if (viewCamera != null) UpdateCamera();
+    }
+
     Material MakeMaterial(Color color)
     {
         var material = new Material(Shader.Find("Standard"));

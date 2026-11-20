@@ -103,14 +103,21 @@ public partial class IrregularLevelRuntime : MonoBehaviour
         Matrix4x4 oldMatrix = Gizmos.matrix;
         Color oldColor = Gizmos.color;
         Gizmos.matrix = transform.localToWorldMatrix;
-        Gizmos.color = new Color(0.72f, 0.77f, 0.83f);
-        foreach (Vector3Int cell in IrregularLevelEditor.ScenePreviewCells)
-            Gizmos.DrawCube((Vector3)cell * cellSize, Vector3.one * (cellSize * 0.94f));
+        if (TryLoadScenePreview(out LevelData preview) && preview.cells != null)
+        {
+            IrregularLevelEditor.DrawScenePreview(preview.cells, cellSize, new Color(0.72f, 0.77f, 0.83f));
 
-        Gizmos.color = playerColor;
-        Gizmos.DrawSphere(new Vector3(0f, 2.55f, 0f) * cellSize, cellSize * 0.14f);
-        Gizmos.color = goalPointColor;
-        Gizmos.DrawSphere(new Vector3(2f, 1.55f, 0f) * cellSize, cellSize * 0.14f);
+            if (preview.hasSpawnPoint)
+            {
+                Gizmos.color = playerColor;
+                Gizmos.DrawSphere(((Vector3)preview.spawnPoint + (Vector3)preview.spawnFaceNormal * 0.55f) * cellSize, cellSize * 0.14f);
+            }
+            if (preview.hasGoalPoint)
+            {
+                Gizmos.color = goalPointColor;
+                Gizmos.DrawSphere(((Vector3)preview.goalPoint + (Vector3)preview.goalFaceNormal * 0.55f) * cellSize, cellSize * 0.14f);
+            }
+        }
         Gizmos.matrix = oldMatrix;
         Gizmos.color = oldColor;
     }

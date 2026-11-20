@@ -102,6 +102,13 @@ public partial class IrregularLevelEditor
         }
 
         GUILayout.Space(8);
+        GUILayout.BeginHorizontal();
+        using (new GUIEnabledScope(!rotating && undoHistory.Count > 0))
+            if (GUILayout.Button("Undo")) UndoEditorAction();
+        using (new GUIEnabledScope(!rotating && redoHistory.Count > 0))
+            if (GUILayout.Button("Redo")) RedoEditorAction();
+        GUILayout.EndHorizontal();
+
         GUILayout.Label("Place at any grid coordinate");
         GUILayout.BeginHorizontal();
         GUILayout.Label("X", GUILayout.Width(14));
@@ -136,28 +143,72 @@ public partial class IrregularLevelEditor
         GUILayout.Label($"Cubes currently in layer: {(active == null ? 0 : GetLayerCubes(active).Count)}", hintStyle);
 
         GUILayout.Space(8);
-        if (GUILayout.Button("Reset example"))
+        GUILayout.BeginHorizontal();
+        using (new GUIEnabledScope(!rotating))
         {
-            foreach (Transform cube in new List<Transform>(cells.Values)) Destroy(cube.gameObject);
-            SetSpawnPoint(null);
-            SetGoalPoint(null);
-            cells.Clear(); blockedFaces.Clear(); layers.Clear(); activeLayerIndex = -1;
-            CreateExample();
-            status = "Restored the irregular example.";
+            if (GUILayout.Button("Clear all"))
+            {
+                ClearLevel();
+                AddCell(Vector3Int.zero);
+                status = "Cleared the level and left one starter cube at (0, 0, 0).";
+            }
+            if (GUILayout.Button("Reset example"))
+            {
+                ClearLevel();
+                CreateExample();
+                status = "Restored the irregular example.";
+            }
+        }
+        GUILayout.EndHorizontal();
+        GUILayout.Label("Saved slots");
+        RefreshSaveSlots();
+        if (saveSlots.Count == 0) GUILayout.Label("No saved slots yet.", hintStyle);
+        else
+        {
+            string[] slotNames = saveSlots.ConvertAll(GetSlotName).ToArray();
+            selectedSaveSlotIndex = Mathf.Clamp(selectedSaveSlotIndex, 0, saveSlots.Count - 1);
+            int previousSelection = selectedSaveSlotIndex;
+            selectedSaveSlotIndex = GUILayout.SelectionGrid(selectedSaveSlotIndex, slotNames, 2);
+            if (selectedSaveSlotIndex != previousSelection)
+            {
+                slotNameInput = GetSlotName(saveSlots[selectedSaveSlotIndex]);
+                int slot = saveSlots[selectedSaveSlotIndex];
+                RememberSelectedSlot(slot);
+            }
         }
         GUILayout.BeginHorizontal();
-        if (GUILayout.Button("Save level")) SaveLevel();
-        if (GUILayout.Button("Load level")) LoadLevel();
+        GUILayout.Label("Slot name", GUILayout.Width(68));
+        slotNameInput = GUILayout.TextField(slotNameInput);
         GUILayout.EndHorizontal();
+        GUILayout.BeginHorizontal();
+        if (GUILayout.Button("Save as new slot")) SaveAsNewSlot();
+        using (new GUIEnabledScope(selectedSaveSlotIndex >= 0 && selectedSaveSlotIndex < saveSlots.Count))
+            if (GUILayout.Button("Overwrite selected")) OverwriteSelectedSlot();
+        GUILayout.EndHorizontal();
+        using (new GUIEnabledScope(selectedSaveSlotIndex >= 0 && selectedSaveSlotIndex < saveSlots.Count))
+            if (GUILayout.Button("Rename selected slot")) RenameSelectedSlot();
+        using (new GUIEnabledScope(selectedSaveSlotIndex >= 0 && selectedSaveSlotIndex < saveSlots.Count))
+            if (GUILayout.Button("Delete selected slot")) pendingDeleteSlot = saveSlots[selectedSaveSlotIndex];
+        if (pendingDeleteSlot >= 0)
+        {
+            GUILayout.Label($"Delete Slot {pendingDeleteSlot} permanently?");
+            GUILayout.BeginHorizontal();
+            if (GUILayout.Button("Confirm delete")) DeleteSlot(pendingDeleteSlot);
+            if (GUILayout.Button("Cancel")) pendingDeleteSlot = -1;
+            GUILayout.EndHorizontal();
+        }
+        using (new GUIEnabledScope(selectedSaveSlotIndex >= 0 && selectedSaveSlotIndex < saveSlots.Count))
+            if (GUILayout.Button("Load selected slot")) LoadSelectedSlot();
         if (GUILayout.Button("Play saved level"))
         {
-            SaveLevel();
+            if (selectedSaveSlotIndex >= 0 && selectedSaveSlotIndex < saveSlots.Count) OverwriteSelectedSlot();
+            else SaveAsNewSlot();
             SceneManager.LoadScene("IrregularLevelPlay");
         }
 
         GUILayout.Space(8);
         GUILayout.Label(status, hintStyle);
-        GUILayout.Label("Right-drag: orbit camera   ·   Mouse wheel: zoom", hintStyle);
+        GUILayout.Label("Right-drag: orbit · Middle-drag: pan · Wheel: zoom", hintStyle);
         GUILayout.EndScrollView();
         GUILayout.EndArea();
     }

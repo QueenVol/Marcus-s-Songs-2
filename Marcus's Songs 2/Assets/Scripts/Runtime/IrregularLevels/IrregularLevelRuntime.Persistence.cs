@@ -9,6 +9,34 @@ public partial class IrregularLevelRuntime
 {
     string SavePath => Path.Combine(Application.persistentDataPath, saveFileName);
 
+    bool TryLoadScenePreview(out LevelData data)
+    {
+        data = null;
+        try
+        {
+            string directory = Path.Combine(Application.persistentDataPath, "IrregularLevelSlots");
+            int slot = -1;
+            string selectedPath = Path.Combine(directory, "selected_slot.txt");
+            if (File.Exists(selectedPath)) int.TryParse(File.ReadAllText(selectedPath), out slot);
+            string slotPath = slot >= 0 ? Path.Combine(directory, $"slot_{slot:D4}.json") : null;
+            if (string.IsNullOrEmpty(slotPath) || !File.Exists(slotPath))
+            {
+                if (Directory.Exists(directory))
+                    foreach (string candidate in Directory.GetFiles(directory, "slot_*.json"))
+                    {
+                        string fileName = Path.GetFileNameWithoutExtension(candidate);
+                        if (fileName.StartsWith("slot_") && int.TryParse(fileName.Substring(5), out int number))
+                            slot = Mathf.Max(slot, number);
+                    }
+                slotPath = slot >= 0 ? Path.Combine(directory, $"slot_{slot:D4}.json") : SavePath;
+            }
+            if (!File.Exists(slotPath)) return false;
+            data = JsonUtility.FromJson<LevelData>(File.ReadAllText(slotPath));
+            return data != null;
+        }
+        catch { return false; }
+    }
+
     void LoadLevel()
     {
         if (!File.Exists(SavePath))

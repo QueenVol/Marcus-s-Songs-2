@@ -8,6 +8,224 @@ using UnityEngine.EventSystems;
 
 public partial class IrregularLevelEditor
 {
+    string SlotDirectory => Path.Combine(Application.persistentDataPath, "IrregularLevelSlots");
+    string SlotPath(int slot) => Path.Combine(SlotDirectory, $"slot_{slot:D4}.json");
+    string SlotNamePath(int slot) => Path.Combine(SlotDirectory, $"slot_{slot:D4}.name");
+    string SelectedSlotPath => Path.Combine(SlotDirectory, "selected_slot.txt");
+    void RememberSelectedSlot(int slot)
+    {
+        Directory.CreateDirectory(SlotDirectory);
+        File.WriteAllText(SelectedSlotPath, slot.ToString());
+    }
+
+    bool TryGetScenePreview(out SavedLevel data)
+    {
+        data = null;
+        try
+        {
+            int slot = -1;
+            if (File.Exists(SelectedSlotPath)) int.TryParse(File.ReadAllText(SelectedSlotPath), out slot);
+            if (slot < 0 || !File.Exists(SlotPath(slot)))
+            {
+                if (!Directory.Exists(SlotDirectory)) return false;
+                foreach (string candidate in Directory.GetFiles(SlotDirectory, "slot_*.json"))
+                {
+                    string fileName = Path.GetFileNameWithoutExtension(candidate);
+                    if (fileName.StartsWith("slot_") && int.TryParse(fileName.Substring(5), out int number))
+                        slot = Mathf.Max(slot, number);
+                }
+            }
+            if (slot < 0) return false;
+            string path = SlotPath(slot);
+            if (!File.Exists(path)) return false;
+            data = JsonUtility.FromJson<SavedLevel>(File.ReadAllText(path));
+            return data != null;
+        }
+        catch { return false; }
+    }
+
+    string GetSlotName(int slot)
+    {
+        string path = SlotNamePath(slot);
+        if (!File.Exists(path)) return $"Slot {slot}";
+        string name = File.ReadAllText(path).Trim();
+        return string.IsNullOrEmpty(name) ? $"Slot {slot}" : name;
+    }
+
+    void SaveSlotName(int slot, string name)
+    {
+        string cleanName = string.IsNullOrWhiteSpace(name) ? $"Slot {slot}" : name.Trim();
+        File.WriteAllText(SlotNamePath(slot), cleanName);
+    }
+
+    void RefreshSaveSlots()
+    {
+        int selectedSlot = selectedSaveSlotIndex >= 0 && selectedSaveSlotIndex < saveSlots.Count
+            ? saveSlots[selectedSaveSlotIndex] : -1;
+        saveSlots.Clear();
+        if (Directory.Exists(SlotDirectory))
+            foreach (string path in Directory.GetFiles(SlotDirectory, "slot_*.json"))
+            {
+                string name = Path.GetFileNameWithoutExtension(path);
+                if (name.StartsWith("slot_") && int.TryParse(name.Substring(5), out int number)) saveSlots.Add(number);
+            }
+        saveSlots.Sort();
+        selectedSaveSlotIndex = selectedSlot >= 0 ? saveSlots.IndexOf(selectedSlot) : (saveSlots.Count > 0 ? 0 : -1);
+    }
+
+    void SaveAsNewSlot()
+    {
+        RefreshSaveSlots();
+        int slot = saveSlots.Count == 0 ? 1 : saveSlots[saveSlots.Count - 1] + 1;
+        SaveLevel();
+        Directory.CreateDirectory(SlotDirectory);
+        string legacyPath = Path.Combine(Application.persistentDataPath, "MarcusSongs_IrregularLevel.json");
+        File.Copy(legacyPath, SlotPath(slot), true);
+        SaveSlotName(slot, slotNameInput);
+        RefreshSaveSlots();
+        selectedSaveSlotIndex = saveSlots.IndexOf(slot);
+        RememberSelectedSlot(slot);
+        slotNameInput = GetSlotName(slot);
+        status = $"Saved as Slot {slot}.";
+    }
+
+    void OverwriteSelectedSlot()
+    {
+        RefreshSaveSlots();
+        if (selectedSaveSlotIndex < 0 || selectedSaveSlotIndex >= saveSlots.Count) return;
+        int slot = saveSlots[selectedSaveSlotIndex];
+        SaveLevel();
+        File.Copy(Path.Combine(Application.persistentDataPath, "MarcusSongs_IrregularLevel.json"), SlotPath(slot), true);
+        status = $"Overwrote Slot {slot}.";
+    }
+
+    void RenameSelectedSlot()
+    {
+        RefreshSaveSlots();
+        if (selectedSaveSlotIndex < 0 || selectedSaveSlotIndex >= saveSlots.Count) return;
+        int slot = saveSlots[selectedSaveSlotIndex];
+        SaveSlotName(slot, slotNameInput);
+        RememberSelectedSlot(slot);
+        slotNameInput = GetSlotName(slot);
+        status = $"Renamed Slot {slot} to \"{slotNameInput}\".";
+    }
+
+    void LoadSelectedSlot()
+    {
+        RefreshSaveSlots();
+        if (selectedSaveSlotIndex < 0 || selectedSaveSlotIndex >= saveSlots.Count) return;
+        LoadSlot(saveSlots[selectedSaveSlotIndex]);
+    }
+
+    void DeleteSlot(int slot)
+    {
+        string path = SlotPath(slot);
+        if (File.Exists(path)) File.Delete(path);
+        string namePath = SlotNamePath(slot);
+        if (File.Exists(namePath)) File.Delete(namePath);
+        pendingDeleteSlot = -1;
+        RefreshSaveSlots();
+        slotNameInput = selectedSaveSlotIndex >= 0 ? GetSlotName(saveSlots[selectedSaveSlotIndex]) : "New Level";
+        if (selectedSaveSlotIndex >= 0) RememberSelectedSlot(saveSlots[selectedSaveSlotIndex]);
+        else if (File.Exists(SelectedSlotPath)) File.Delete(SelectedSlotPath);
+        status = $"Deleted Slot {slot}.";
+    }
+
+    void LoadSlot(int slot)
+    {
+        string path = SlotPath(slot);
+        if (!File.Exists(path)) { status = $"Slot {slot} could not be found."; RefreshSaveSlots(); return; }
+        string legacyPath = Path.Combine(Application.persistentDataPath, "MarcusSongs_IrregularLevel.json");
+        File.Copy(path, legacyPath, true);
+        LoadLevel();
+        selectedSaveSlotIndex = saveSlots.IndexOf(slot);
+        RememberSelectedSlot(slot);
+        slotNameInput = GetSlotName(slot);
+        status = $"Loaded Slot {slot}.";
+    }
+
+    string CaptureEditorState()
+    {
+        var data = new SavedLevel();
+        foreach (Vector3Int cell in cells.Keys) data.cells.Add(cell);
+        foreach (BlockedFaceData face in blockedFaces)
+            data.blockedFaces.Add(new BlockedFaceData { cell = face.cell, normal = face.normal });
+        if (spawnCube != null)
+        {
+            data.hasSpawnPoint = true;
+            data.spawnPoint = LocalToCell(spawnCube.localPosition);
+            data.spawnFaceNormal = SnapToFace(transform.InverseTransformDirection(spawnCube.TransformDirection(spawnFaceNormal)));
+        }
+        if (goalCube != null)
+        {
+            data.hasGoalPoint = true;
+            data.goalPoint = LocalToCell(goalCube.localPosition);
+            data.goalFaceNormal = SnapToFace(transform.InverseTransformDirection(goalCube.TransformDirection(goalFaceNormal)));
+        }
+        foreach (RotationLayer layer in layers)
+            data.layers.Add(new SavedLayer { name = layer.name, axis = (int)layer.axis, axisPoint = layer.axisPoint });
+        data.activeLayerIndex = activeLayerIndex;
+        return JsonUtility.ToJson(data);
+    }
+
+    void TrackEditorHistory()
+    {
+        if (applyingHistory || lastHistoryState == null || rotating) return;
+        string current = CaptureEditorState();
+        if (current == lastHistoryState) return;
+        undoHistory.Add(lastHistoryState);
+        if (undoHistory.Count > 100) undoHistory.RemoveAt(0);
+        redoHistory.Clear();
+        lastHistoryState = current;
+    }
+
+    void UndoEditorAction()
+    {
+        if (undoHistory.Count == 0) return;
+        redoHistory.Add(CaptureEditorState());
+        string previous = undoHistory[undoHistory.Count - 1];
+        undoHistory.RemoveAt(undoHistory.Count - 1);
+        RestoreEditorState(previous);
+        status = "Undid the last level edit.";
+    }
+
+    void RedoEditorAction()
+    {
+        if (redoHistory.Count == 0) return;
+        undoHistory.Add(CaptureEditorState());
+        string next = redoHistory[redoHistory.Count - 1];
+        redoHistory.RemoveAt(redoHistory.Count - 1);
+        RestoreEditorState(next);
+        status = "Redid the level edit.";
+    }
+
+    void RestoreEditorState(string json)
+    {
+        SavedLevel data = JsonUtility.FromJson<SavedLevel>(json);
+        if (data == null) return;
+        applyingHistory = true;
+        foreach (Transform cube in new List<Transform>(cells.Values)) if (cube != null) Destroy(cube.gameObject);
+        SetSpawnPoint(null);
+        SetGoalPoint(null);
+        cells.Clear(); blockedFaces.Clear(); layers.Clear(); activeLayerIndex = -1;
+        foreach (Vector3Int cell in data.cells) AddCell(cell);
+        foreach (BlockedFaceData face in data.blockedFaces)
+            if (face != null && cells.ContainsKey(face.cell)) AddBlockedFaceFromSave(face.cell, SnapToFace(face.normal));
+        foreach (SavedLayer saved in data.layers)
+        {
+            AddLayer(saved.name);
+            ActiveLayer.axis = (Axis)Mathf.Clamp(saved.axis, 0, 2);
+            ActiveLayer.axisPoint = saved.axisPoint;
+        }
+        activeLayerIndex = layers.Count == 0 ? -1 : Mathf.Clamp(data.activeLayerIndex, 0, layers.Count - 1);
+        if (data.hasSpawnPoint && cells.ContainsKey(data.spawnPoint)) SetSpawnPoint(data.spawnPoint, data.spawnFaceNormal);
+        if (data.hasGoalPoint && cells.ContainsKey(data.goalPoint)) SetGoalPoint(data.goalPoint, data.goalFaceNormal);
+        RefreshCellColors(); UpdateAxisLine();
+        if (viewCamera != null) UpdateCamera();
+        lastHistoryState = CaptureEditorState();
+        applyingHistory = false;
+    }
+
     void SaveLevel()
     {
         var data = new SavedLevel();

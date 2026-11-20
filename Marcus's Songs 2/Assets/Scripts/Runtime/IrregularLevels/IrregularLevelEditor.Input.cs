@@ -10,6 +10,7 @@ public partial class IrregularLevelEditor
 {
     void Update()
     {
+        TrackEditorHistory();
         if (viewCamera == null) return;
         if (Input.GetMouseButtonDown(1)) lastMouse = Input.mousePosition;
         if (Input.GetMouseButton(1))
@@ -18,6 +19,22 @@ public partial class IrregularLevelEditor
             Vector2 delta = current - lastMouse;
             orbitYaw += delta.x * 0.35f;
             orbitPitch = Mathf.Clamp(orbitPitch - delta.y * 0.25f, -10f, 70f);
+            lastMouse = current;
+            UpdateCamera();
+        }
+        if (Input.GetMouseButtonDown(2))
+        {
+            panningCamera = !PointerOverEditorPanel();
+            lastMouse = Input.mousePosition;
+        }
+        if (!Input.GetMouseButton(2)) panningCamera = false;
+        if (panningCamera && Input.GetMouseButton(2))
+        {
+            Vector2 current = Input.mousePosition;
+            Vector2 delta = current - lastMouse;
+            Quaternion rotation = Quaternion.Euler(orbitPitch, orbitYaw, 0f);
+            float worldUnitsPerPixel = 2f * orbitDistance * Mathf.Tan(viewCamera.fieldOfView * 0.5f * Mathf.Deg2Rad) / Mathf.Max(1, Screen.height);
+            cameraPanOffset -= rotation * new Vector3(delta.x, delta.y, 0f) * worldUnitsPerPixel;
             lastMouse = current;
             UpdateCamera();
         }
@@ -91,7 +108,7 @@ public partial class IrregularLevelEditor
 
     void UpdateCamera()
     {
-        Vector3 center = MapCenter();
+        Vector3 center = MapCenter() + cameraPanOffset;
         Quaternion rotation = Quaternion.Euler(orbitPitch, orbitYaw, 0f);
         viewCamera.transform.position = center + rotation * new Vector3(0f, 0f, -orbitDistance);
         viewCamera.transform.rotation = rotation;
@@ -108,14 +125,21 @@ public partial class IrregularLevelEditor
 
         if (!Application.isPlaying)
         {
-            Gizmos.color = cubeColor;
-            foreach (Vector3Int cell in ScenePreviewCells)
-                Gizmos.DrawCube(CellToLocal(cell), Vector3.one * (cellSize * 0.94f));
+            if (TryGetScenePreview(out SavedLevel savedPreview) && savedPreview.cells != null)
+            {
+                DrawScenePreview(savedPreview.cells, cellSize, cubeColor);
 
-            Gizmos.color = spawnPointColor;
-            Gizmos.DrawSphere(CellToLocal(new Vector3Int(0, 2, 0)) + Vector3.up * (cellSize * 0.55f), cellSize * 0.14f);
-            Gizmos.color = goalPointColor;
-            Gizmos.DrawSphere(CellToLocal(new Vector3Int(2, 1, 0)) + Vector3.up * (cellSize * 0.55f), cellSize * 0.14f);
+                if (savedPreview.hasSpawnPoint)
+                {
+                    Gizmos.color = spawnPointColor;
+                    Gizmos.DrawSphere(CellToLocal(savedPreview.spawnPoint) + (Vector3)savedPreview.spawnFaceNormal * (cellSize * 0.55f), cellSize * 0.14f);
+                }
+                if (savedPreview.hasGoalPoint)
+                {
+                    Gizmos.color = goalPointColor;
+                    Gizmos.DrawSphere(CellToLocal(savedPreview.goalPoint) + (Vector3)savedPreview.goalFaceNormal * (cellSize * 0.55f), cellSize * 0.14f);
+                }
+            }
             Gizmos.matrix = oldMatrix;
             Gizmos.color = oldColor;
             return;
