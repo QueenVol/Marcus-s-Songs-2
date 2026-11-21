@@ -160,6 +160,7 @@ public partial class IrregularLevelEditor
             }
         }
         GUILayout.EndHorizontal();
+        if (GUILayout.Button("Load bundled Skybridge JSON")) LoadBundledLevel();
         GUILayout.Label("Saved slots");
         RefreshSaveSlots();
         if (saveSlots.Count == 0) GUILayout.Label("No saved slots yet.", hintStyle);

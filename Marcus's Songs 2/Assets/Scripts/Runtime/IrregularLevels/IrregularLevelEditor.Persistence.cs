@@ -264,16 +264,39 @@ public partial class IrregularLevelEditor
     void LoadLevel()
     {
         string path = Path.Combine(Application.persistentDataPath, "MarcusSongs_IrregularLevel.json");
+        LoadLevelFromPath(path);
+    }
+
+    void LoadBundledLevel()
+    {
+        string path = Path.Combine(Application.dataPath, "Levels", "Level01_Skybridge.json");
+        status = string.Empty;
+        LoadLevelFromPath(path);
+        if (status.StartsWith("Loaded irregular level from "))
+        {
+            slotNameInput = "Skybridge";
+            status = "Loaded Skybridge from Assets/Levels/Level01_Skybridge.json. Save it as a slot to play it.";
+        }
+    }
+
+    void LoadLevelFromPath(string path)
+    {
         if (!File.Exists(path))
         {
-            status = "No saved level found yet. Use Save level first.";
+            status = $"Level JSON not found: {path}";
             return;
         }
 
-        SavedLevel data = JsonUtility.FromJson<SavedLevel>(File.ReadAllText(path));
-        if (data == null)
+        SavedLevel data;
+        try { data = JsonUtility.FromJson<SavedLevel>(File.ReadAllText(path)); }
+        catch (Exception exception)
         {
-            status = "Saved level could not be read.";
+            status = $"Level JSON could not be read: {exception.Message}";
+            return;
+        }
+        if (data == null || data.cells == null)
+        {
+            status = "Level JSON is empty or has no cells.";
             return;
         }
         foreach (Transform cube in new List<Transform>(cells.Values)) Destroy(cube.gameObject);
@@ -331,7 +354,10 @@ public partial class IrregularLevelEditor
         if (data.hasGoalPoint && cells.ContainsKey(data.goalPoint) && !HasBlockedFace(data.goalPoint, SnapToFace(data.goalFaceNormal))) SetGoalPoint(data.goalPoint, data.goalFaceNormal);
         RefreshCellColors();
         UpdateAxisLine();
-        status = "Loaded the saved irregular level.";
+        status = $"Loaded irregular level from {Path.GetFileName(path)}.";
+        lastHistoryState = CaptureEditorState();
+        undoHistory.Clear();
+        redoHistory.Clear();
     }
 
     void AddBlockedFaceFromSave(Vector3Int cell, Vector3Int normal)
